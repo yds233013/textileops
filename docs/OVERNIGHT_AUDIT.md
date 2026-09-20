@@ -804,3 +804,38 @@ Also added: `scale-data` and the benchmark harness, with the warning to point
 `DATABASE_URL` somewhere throwaway first — I sent 31,000 fictional rows into
 the demo database by assuming an env prefix that does not exist.
 
+## Phase 30 — Release gate
+
+Everything, run at the end rather than trusted from earlier in the night.
+
+| gate | result |
+|---|---|
+| `./scripts/verify.sh` | **exit 0** |
+| Backend tests | **500** |
+| — of which adversarial | **285** across 22 files |
+| Frontend tests | **55** |
+| ruff / mypy (87 files) / tsc / next lint | clean |
+| Production build | ok |
+| AI deterministic evals | passed |
+| Concurrency suite, 5 consecutive runs | **5/5** |
+| Property + ledger suites, 4 repeats | green |
+| Clean migration, empty database → head | 9 revisions, 37 tables, 38 enums |
+| Downgrade to base and back | ok |
+| Integrity, demo data | OK, 12 checks |
+| Integrity, 61,623-row scale data | OK, 12 checks |
+
+Two things the gate itself caught, which is the point of running it:
+
+- **The `rejected_stock_available` check had become wrong.** It asserted the
+  batch's output lot was *not* available — true only while a rejection
+  quarantined everything. Partial acceptance now releases the good portion,
+  correctly, so the check is narrower and stronger: the rejected quantity must
+  actually have left the books, with rework excluded because that cloth is
+  meant to come back.
+- **Hypothesis found another conversion edge.** 0.001 g in pounds loses
+  0.00099999… of a gram — a hair under one whole step — so the proportional
+  guard passed and the gram vanished. A positive quantity converting to
+  nothing now has its own check. Worth noting that this only appeared on a run
+  where Hypothesis happened to try that pair: the property tests are worth
+  repeating, not running once.
+
