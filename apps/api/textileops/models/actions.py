@@ -68,7 +68,9 @@ class ActionProposal(Base, TimestampMixin):
     draft_edited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     ai_request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     model: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -149,7 +151,9 @@ class Execution(Base, TimestampMixin):
     #: One execution per proposal per attempt key — replays are no-ops.
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     executed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
 
     proposal: Mapped[ActionProposal] = relationship(back_populates="executions")

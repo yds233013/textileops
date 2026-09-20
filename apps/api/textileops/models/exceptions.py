@@ -64,8 +64,16 @@ class OperationalException(Base, TimestampMixin):
     #: closed it: used to auto-resolve cleanly.
     auto_resolved: Mapped[bool] = mapped_column(nullable=False, default=False)
 
+    #: An assignment, not an act: SET NULL is right here, because unassigning
+    #: an open exception when somebody leaves is exactly what should happen.
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: Who decided this was dealt with. An act, so RESTRICT. Null when the
+    #: engine auto-resolved it — which is why ``auto_resolved`` is a separate
+    #: flag rather than being inferred from this being empty.
+    resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -192,7 +200,9 @@ class Investigation(Base, TimestampMixin):
     tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
 
     exception: Mapped[OperationalException] = relationship(back_populates="investigations")

@@ -38,7 +38,9 @@ class AuditEvent(Base):
     #: "user" | "system" | "ai"
     actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     actor_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     #: Dotted verb, e.g. "purchase_order.eta_revised", "proposal.approved".

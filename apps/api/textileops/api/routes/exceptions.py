@@ -71,6 +71,7 @@ class ExceptionOut(BaseModel):
     impact: dict[str, Any] | None
     detection_metrics: dict[str, Any] | None
     owner_user_id: uuid.UUID | None
+    resolved_by_user_id: uuid.UUID | None
     resolution_note: str | None
 
 
@@ -129,6 +130,7 @@ def _out(exception: OperationalException) -> ExceptionOut:
         impact=exception.impact,
         detection_metrics=exception.detection_metrics,
         owner_user_id=exception.owner_user_id,
+        resolved_by_user_id=exception.resolved_by_user_id,
         resolution_note=exception.resolution_note,
     )
 
@@ -328,11 +330,18 @@ def change_status(
     if target == ExceptionStatus.RESOLVED:
         exception.resolved_at = now
         exception.auto_resolved = False
+        # Recorded on the exception itself, not only in the audit trail:
+        # "who decided this was dealt with?" should be answerable from the
+        # thing itself rather than by searching events for it.
+        exception.resolved_by_user_id = user.id
     elif target == ExceptionStatus.DISMISSED:
         exception.dismissed_at = now
+        exception.resolved_by_user_id = user.id
     else:
+        # Reopened. Whoever closed it no longer closed it.
         exception.resolved_at = None
         exception.dismissed_at = None
+        exception.resolved_by_user_id = None
 
     record_audit(
         session,

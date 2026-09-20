@@ -47,7 +47,9 @@ class QCInspection(Base, TimestampMixin):
         enum_column(UnitOfMeasure, "unit_of_measure"), nullable=False
     )
     inspector_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     reinspection_of_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("qc_inspections.id", ondelete="SET NULL"), nullable=True

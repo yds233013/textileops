@@ -157,3 +157,34 @@ whichever test happens to be running. Half an hour went into chasing that
 before `pg_stat_activity` showed the other process. Concurrency suites get run
 on their own.
 
+## Phase 3 — Actor and audit immutability
+
+Thirteen columns reference `users`. A structural test
+(`test_actor_durability.py`) enumerates them from `pg_constraint` and requires
+every one to be a deliberate decision, so a new actor column cannot arrive as
+SET NULL unnoticed.
+
+**Found: nine of them would have been erased by deleting the account** —
+who proposed an action, who executed it, who moved the stock, who inspected
+the cloth, who asked for the investigation, who recorded the production event,
+who reconciled the discrepancy, who supplied the document, and the entire
+audit trail's `actor_user_id`. Only `approvals.decided_by_user_id` was
+protected.
+
+**Also found: nothing recorded who resolved or dismissed an exception.** The
+only trace was an audit event, so the question could be answered by searching
+but not by looking. Added `operational_exceptions.resolved_by_user_id`
+(RESTRICT), cleared again if the exception is reopened.
+
+Two columns stay SET NULL on purpose and the test asserts that too:
+`operational_exceptions.owner_user_id` is an assignment — unassigning on
+departure is right — and `business_metric_events.user_id` is instrumentation,
+not a business record.
+
+Deactivation was already the better path and already worked:
+`users.is_active` is checked both at login and on every request, so a token
+issued before deactivation stops working immediately rather than at expiry.
+Both are now covered by tests.
+
+Migration `57f3be57cca6`, upgrade and downgrade exercised.
+

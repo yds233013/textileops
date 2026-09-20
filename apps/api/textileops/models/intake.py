@@ -65,7 +65,9 @@ class SourceDocument(Base, TimestampMixin):
     received_at: Mapped[dt.datetime] = mapped_column(TS, nullable=False)
     processed_at: Mapped[dt.datetime | None] = mapped_column(TS, nullable=True)
     uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: Plain-text rendering used for extraction. Treated as untrusted content.
@@ -216,7 +218,9 @@ class ReconciliationItem(Base, TimestampMixin):
         default=ReconciliationStatus.OPEN,
     )
     resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     resolved_at: Mapped[dt.datetime | None] = mapped_column(TS, nullable=True)
     resolution: Mapped[dict[str, Any] | None] = mapped_column(nullable=True)

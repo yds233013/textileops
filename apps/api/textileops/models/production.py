@@ -165,7 +165,9 @@ class ProductionEvent(Base, TimestampMixin):
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        # RESTRICT, not SET NULL: this records what a person did, and
+        # deleting their account must not rewrite that into "somebody".
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     payload: Mapped[dict[str, Any] | None] = mapped_column(nullable=True)
 
