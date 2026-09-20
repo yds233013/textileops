@@ -53,6 +53,9 @@ def create_app() -> FastAPI:
     # noticed because pytest imports the worker tests into the same process.
     from textileops.workers import tasks as _register_task_handlers  # noqa: F401
 
+    # Fail loudly at startup rather than quietly serving a forgeable token.
+    settings.assert_safe_for_production()
+
     app = FastAPI(
         title="TextileOps API",
         version=__version__,
@@ -61,8 +64,11 @@ def create_app() -> FastAPI:
             "authoritative; models propose, humans approve, the application executes."
         ),
         lifespan=lifespan,
-        docs_url="/docs",
-        openapi_url="/openapi.json",
+        # The schema is a map of every route and payload shape. Useful in
+        # development, and an invitation in production.
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None if settings.is_production else "/redoc",
+        openapi_url=None if settings.is_production else "/openapi.json",
     )
 
     app.add_middleware(

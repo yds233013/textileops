@@ -7,7 +7,7 @@ committed; ``infra/.env.example`` documents every variable.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -98,9 +98,40 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
+    #: The value shipped in .env.example. Anyone who has read the repository
+    #: can forge an owner token with it. ClassVar, or pydantic-settings takes
+    #: it for a field.
+    INSECURE_JWT_SECRET: ClassVar[str] = "dev-only-insecure-secret-change-me"
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    def assert_safe_for_production(self) -> None:
+        """Refuse to start a production deployment with development defaults.
+
+        SECURITY.md lists changing the JWT secret as a deployment step, which
+        is a document telling a person to remember something. Nothing enforced
+        it, and forging an `owner` token with the published default is a
+        two-line script. A deployment that would be trivially forgeable should
+        not start at all.
+        """
+        if not self.is_production:
+            return
+        problems: list[str] = []
+        if self.jwt_secret == self.INSECURE_JWT_SECRET:
+            problems.append(
+                "JWT_SECRET is still the development default, so anyone who has "
+                "read this repository can mint an owner token"
+            )
+        if self.debug:
+            problems.append("DEBUG is on, which exposes internals in responses")
+        if "*" in self.cors_origins:
+            problems.append("CORS_ORIGINS allows any origin")
+        if problems:
+            raise RuntimeError(
+                "Refusing to start in production:\n  - " + "\n  - ".join(problems)
+            )
 
     @property
     def ai_enabled(self) -> bool:

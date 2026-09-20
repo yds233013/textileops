@@ -35,6 +35,7 @@ from textileops.core.errors import (
     ConflictError,
     IllegalStateTransition,
     NotFoundError,
+    PermissionError_,
     PilotModeRestriction,
     ValidationError,
 )
@@ -52,9 +53,11 @@ from textileops.models.enums import (
     ProposalOrigin,
     ProposalStatus,
     QCOutcome,
+    UserRole,
 )
 from textileops.models.exceptions import OperationalException
 from textileops.models.inventory import InventoryReservation
+from textileops.models.org import User
 from textileops.models.procurement import PurchaseOrder, PurchaseOrderLine
 from textileops.models.production import ProductionBatch
 from textileops.models.quality import QCInspection
@@ -286,6 +289,31 @@ def approve(
     lock_row(session, proposal)
 
     _assert_actionable(proposal)
+
+    # Separation of duties, but only where it is meaningful. Most proposals
+    # originate from the rule engine or an investigation and have no human
+    # author, so there is nobody to separate from. When a *person* raised one,
+    # a second person should approve it — otherwise "proposal, approval,
+    # execution" is one person clicking twice, which is a log rather than a
+    # control.
+    #
+    # A mill's operations desk can be two people, so this is not absolute:
+    # an owner can approve their own proposal, because the alternative is a
+    # business that cannot act on a Saturday.
+    if (
+        proposal.origin == ProposalOrigin.HUMAN
+        and proposal.created_by_user_id is not None
+        and proposal.created_by_user_id == user_id
+    ):
+        approver = session.get(User, user_id)
+        if approver is None or approver.role != UserRole.OWNER:
+            raise PermissionError_(
+                f"{proposal.code} was raised by you. Somebody else needs to "
+                "approve it — an approval by its own author is not a second "
+                "pair of eyes. An owner may override this.",
+                details={"proposal": proposal.code},
+            )
+
     if modified_payload:
         validate_payload(proposal.action_type, modified_payload)
         proposal.payload = _jsonable(modified_payload)

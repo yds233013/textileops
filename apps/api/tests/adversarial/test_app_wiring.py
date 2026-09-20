@@ -113,3 +113,75 @@ def test_the_app_imports_without_a_database():
         """
     )
     assert "IMPORTED" in result.stdout, result.stderr[-1500:]
+
+
+def test_production_refuses_to_start_with_the_development_secret():
+    """SECURITY.md lists changing the JWT secret as a deployment step.
+
+    That is a document telling a person to remember something. Forging an
+    `owner` token with the published default is a two-line script, so a
+    deployment that would be trivially forgeable should not start at all.
+    """
+    result = _in_fresh_process(
+        """
+        from textileops.core.config import Settings
+        s = Settings(environment="production", jwt_secret=Settings.INSECURE_JWT_SECRET)
+        try:
+            s.assert_safe_for_production()
+            print("STARTED")
+        except RuntimeError as exc:
+            print("REFUSED:" + str(exc).replace(chr(10), " | "))
+        """
+    )
+    assert result.returncode == 0, result.stderr[-1000:]
+    assert "REFUSED:" in result.stdout, result.stdout
+    assert "development default" in result.stdout
+
+
+def test_production_starts_with_a_real_secret():
+    """The guard must not make production impossible to deploy."""
+    result = _in_fresh_process(
+        """
+        from textileops.core.config import Settings
+        s = Settings(
+            environment="production",
+            jwt_secret="a-real-secret-from-the-deployment-environment",
+            debug=False,
+        )
+        s.assert_safe_for_production()
+        print("STARTED")
+        """
+    )
+    assert "STARTED" in result.stdout, result.stderr[-1000:]
+
+
+def test_development_is_not_held_to_the_production_rules():
+    result = _in_fresh_process(
+        """
+        from textileops.core.config import Settings
+        Settings(environment="development").assert_safe_for_production()
+        print("STARTED")
+        """
+    )
+    assert "STARTED" in result.stdout, result.stderr[-1000:]
+
+
+def test_the_schema_is_not_published_in_production():
+    """/openapi.json is a map of every route and payload shape."""
+    result = _in_fresh_process(
+        """
+        import os
+        os.environ["ENVIRONMENT"] = "production"
+        os.environ["JWT_SECRET"] = "a-real-secret-from-the-deployment-environment"
+        # The local .env turns DEBUG on, and the guard correctly refuses to
+        # start a production deployment with it. Overridden here so this test
+        # is about the schema endpoints and not about that.
+        os.environ["DEBUG"] = "false"
+        os.environ["CORS_ORIGINS"] = "https://ops.example"
+        from textileops.api.main import create_app
+        app = create_app()
+        print(f"DOCS:{app.docs_url}|OPENAPI:{app.openapi_url}")
+        """
+    )
+    assert result.returncode == 0, result.stderr[-1500:]
+    assert "DOCS:None|OPENAPI:None" in result.stdout, result.stdout

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from decimal import Decimal
 
@@ -11,8 +12,10 @@ from fastapi.testclient import TestClient
 from tests.conftest import make_purchase_order, make_sales_order, moment
 from textileops.api.deps import db_session
 from textileops.api.main import create_app
+from textileops.core.security import hash_password
 from textileops.core.units import UnitOfMeasure
-from textileops.models.enums import ActionType, ProposalOrigin
+from textileops.models.enums import ActionType, ProposalOrigin, UserRole
+from textileops.models.org import User
 from textileops.services import actions, exception_engine, inventory
 
 D = Decimal
@@ -350,7 +353,19 @@ def test_audit_log_records_who_did_what(client, auth, session, supplier, user):
         created_by_user_id=user.id,
     )
     session.flush()
-    actions.approve(session, proposal, user_id=user.id)
+    # Approved by a colleague, not by its own author. A person approving the
+    # proposal they raised is refused now — "propose, approve, execute" done
+    # by one person is a log, not a control — and the audit trail is more
+    # interesting when it names two people anyway.
+    approver = User(
+        email=f"approver-{uuid.uuid4().hex[:6]}@example.com",
+        full_name="Second Pair Of Eyes",
+        role=UserRole.OPERATIONS,
+        password_hash=hash_password("password123"),
+    )
+    session.add(approver)
+    session.flush()
+    actions.approve(session, proposal, user_id=approver.id)
     session.flush()
 
     events = client.get(f"{PREFIX}/audit", headers=auth).json()

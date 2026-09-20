@@ -714,3 +714,37 @@ Reviewer D's structural point stands and is recorded under remaining risks:
 none of the 27 page components has a render test, which is why all of D1–D5
 lived in untested paths.
 
+### Security hardening (Reviewer C, lower severity but cheap)
+
+- **A production deployment now refuses to start with development defaults.**
+  `SECURITY.md` listed changing `JWT_SECRET` as a deployment step — a document
+  telling a person to remember something. Forging an `owner` token with the
+  published default is a two-line script. `assert_safe_for_production` refuses
+  to boot on the default secret, on `DEBUG`, or on a wildcard CORS origin.
+  (It fired immediately in the test environment, on `DEBUG` from the local
+  `.env` — which is the guard working.)
+- **`/docs` and `/openapi.json` are no longer served in production.**
+- **An execution's error is no longer returned verbatim.** A SQLAlchemy
+  failure carries the statement, the constraint name and the bound
+  parameters; `api/errors.py` is careful never to return that anywhere else,
+  and this path was handing it to every signed-in user. The operator now
+  learns what *kind* of failure it was; the full text stays in the execution
+  record and the audit trail.
+- **Separation of duties on approval.** A person can no longer approve a
+  proposal they raised themselves — otherwise "propose → approve → execute" is
+  one person clicking twice, which is a log rather than a control. Deliberately
+  narrow: it applies only to `HUMAN`-origin proposals, since rule-engine and
+  investigation proposals have no author to separate from, and an **owner may
+  override**, because a mill's operations desk can be two people and a control
+  nobody can satisfy on a Saturday is one people route around.
+- **`issued_quantity <= required_quantity`** on production requirements
+  (Reviewer B). `outstanding_quantity` clamps at zero, so an over-issue was
+  silently absorbed — the same hole `shipped_within_ordered` closed on the
+  sales side.
+
+Not fixed, reported honestly: the login timing oracle (an unknown address
+skips bcrypt, so it answers measurably faster than a known one). Real, but
+closing it properly means a dummy hash comparison on every failed login and I
+did not want to touch the auth path this late without more care than I had
+left. Recorded under remaining risks.
+

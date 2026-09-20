@@ -138,6 +138,13 @@ class ProductionMaterialRequirement(Base, TimestampMixin):
         UniqueConstraint("production_batch_id", "material_id", name="uq_batch_material"),
         CheckConstraint("required_quantity > 0", name="required_quantity_positive"),
         CheckConstraint("issued_quantity >= 0", name="issued_non_negative"),
+        # A batch cannot draw more than it needs. `outstanding_quantity`
+        # clamps at zero, so an over-issue was silently absorbed and never
+        # surfaced anywhere — the same shape of hole that
+        # `shipped_within_ordered` was added to close on the sales side.
+        CheckConstraint(
+            "issued_quantity <= required_quantity", name="issued_within_required"
+        ),
         Index("ix_prod_requirements_material_date", "material_id", "required_by"),
     )
 

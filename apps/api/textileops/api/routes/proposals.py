@@ -106,7 +106,13 @@ def _out(proposal: ActionProposal) -> ProposalOut:
                 attempted_at=execution.attempted_at,
                 completed_at=execution.completed_at,
                 result=execution.result,
-                error=execution.error,
+                # Deliberately summarised. The stored error is the raw
+                # exception, and a SQLAlchemy failure carries the statement,
+                # the constraint name and the bound parameters — which is
+                # exactly what api/errors.py is careful never to return
+                # anywhere else. The full text stays in the execution record
+                # and the audit trail, where an engineer can read it.
+                error=_safe_error(execution.error),
             )
             for execution in proposal.executions
         ],
@@ -199,6 +205,22 @@ class DecisionRequest(BaseModel):
     modified_payload: dict[str, Any] | None = None
 
 
+def _safe_error(error: str | None) -> str | None:
+    """What an operator is told when an execution fails.
+
+    Enough to know what kind of thing went wrong and that somebody should
+    look, without handing every signed-in user the internals of the failure.
+    """
+    if not error:
+        return None
+    kind, _, _detail = error.partition(":")
+    kind = kind.strip() or "Error"
+    return (
+        f"{kind}. The full error is recorded against this execution and in the "
+        "audit trail."
+    )
+
+
 class DecisionResponse(BaseModel):
     proposal: ProposalOut
     execution: ExecutionOut | None
@@ -241,7 +263,7 @@ def approve(
         message = "Approved and carried out."
     else:
         outcome = "failed"
-        message = f"Approved, but execution failed: {execution.error}"
+        message = f"Approved, but execution failed: {_safe_error(execution.error)}"
     return DecisionResponse(
         proposal=out,
         execution=out.executions[-1] if out.executions else None,

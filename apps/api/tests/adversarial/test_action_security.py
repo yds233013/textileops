@@ -10,16 +10,23 @@ approving an expired proposal, and approving without the role to do it.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Iterator
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from textileops.api.deps import db_session
 from textileops.api.main import create_app
-from textileops.core.errors import ConflictError, IllegalStateTransition, ValidationError
+from textileops.core.errors import (
+    ConflictError,
+    IllegalStateTransition,
+    PermissionError_,
+    ValidationError,
+)
 from textileops.core.security import hash_password
 from textileops.models.actions import Approval, Execution
 from textileops.models.enums import (
@@ -253,3 +260,140 @@ def test_every_state_changing_proposal_route_requires_an_approver_role():
         assert "ApproverUser" in signature or "ApproverUser" in dependencies, (
             f"{route.path} changes state but does not require an approver role"
         )
+
+
+# --- Separation of duties and disclosure --------------------------------------
+
+
+def test_a_person_cannot_approve_the_proposal_they_raised(session, supplier, yarn):
+    """Otherwise "propose, approve, execute" is one person clicking twice.
+
+    Only applies where there is somebody to separate from: proposals from the
+    rule engine or an investigation have no human author.
+    """
+    author = _user(session, UserRole.OPERATIONS)
+    proposal = actions.create_proposal(
+        session,
+        action_type=ActionType.RAISE_PURCHASE_ORDER,
+        title="Buy yarn",
+        rationale="I think we need it.",
+        payload={
+            "supplier_id": str(supplier.id),
+            "material_id": str(yarn.id),
+            "quantity": "500.000",
+            "unit": "kg",
+            "needed_by": "2026-07-15",
+        },
+        origin=ProposalOrigin.HUMAN,
+        created_by_user_id=author.id,
+    )
+    session.flush()
+
+    with pytest.raises(PermissionError_) as exc:
+        actions.approve(session, proposal, user_id=author.id)
+    assert "second pair of eyes" in str(exc.value)
+    assert proposal.status == ProposalStatus.PENDING_APPROVAL
+
+
+def test_somebody_else_can_approve_it(session, supplier, yarn):
+    author = _user(session, UserRole.OPERATIONS)
+    colleague = _user(session, UserRole.PROCUREMENT)
+    proposal = actions.create_proposal(
+        session,
+        action_type=ActionType.RAISE_PURCHASE_ORDER,
+        title="Buy yarn",
+        rationale="I think we need it.",
+        payload={
+            "supplier_id": str(supplier.id),
+            "material_id": str(yarn.id),
+            "quantity": "500.000",
+            "unit": "kg",
+            "needed_by": "2026-07-15",
+        },
+        origin=ProposalOrigin.HUMAN,
+        created_by_user_id=author.id,
+    )
+    session.flush()
+
+    actions.approve(session, proposal, user_id=colleague.id)
+    assert proposal.status == ProposalStatus.EXECUTED
+
+
+def test_an_owner_may_approve_their_own(session, supplier, yarn):
+    """A mill's operations desk can be two people.
+
+    The alternative is a business that cannot act on a Saturday, which is how
+    a control becomes something people work around.
+    """
+    owner = _user(session, UserRole.OWNER)
+    proposal = actions.create_proposal(
+        session,
+        action_type=ActionType.RAISE_PURCHASE_ORDER,
+        title="Buy yarn",
+        rationale="We need it.",
+        payload={
+            "supplier_id": str(supplier.id),
+            "material_id": str(yarn.id),
+            "quantity": "500.000",
+            "unit": "kg",
+            "needed_by": "2026-07-15",
+        },
+        origin=ProposalOrigin.HUMAN,
+        created_by_user_id=owner.id,
+    )
+    session.flush()
+    actions.approve(session, proposal, user_id=owner.id)
+    assert proposal.status == ProposalStatus.EXECUTED
+
+
+def test_a_rule_engine_proposal_needs_no_second_author(session, proposal, user):
+    """There is nobody to separate from."""
+    actions.approve(session, proposal, user_id=user.id)
+    assert proposal.status == ProposalStatus.EXECUTED
+
+
+def test_a_failed_execution_does_not_hand_the_operator_our_internals(
+    client_with_auth, session, supplier, yarn
+):
+    """A SQLAlchemy failure carries the statement, the constraint and the
+    bound parameters. api/errors.py is careful never to return that anywhere
+    else; the execution error was going out verbatim."""
+    from textileops.models.actions import Execution
+
+    client, headers = client_with_auth
+    created = actions.create_proposal(
+        session,
+        action_type=ActionType.RAISE_PURCHASE_ORDER,
+        title="Buy yarn",
+        rationale="Coverage gap.",
+        payload={
+            "supplier_id": str(supplier.id),
+            "material_id": str(yarn.id),
+            "quantity": "500.000",
+            "unit": "kg",
+            "needed_by": "2026-07-15",
+        },
+        origin=ProposalOrigin.RULE_ENGINE,
+    )
+    session.flush()
+    approver = _user(session, UserRole.OPERATIONS)
+    actions.approve(session, created, user_id=approver.id, execute_now=True)
+    session.flush()
+
+    execution = session.scalars(
+        select(Execution).where(Execution.action_proposal_id == created.id)
+    ).first()
+    assert execution is not None
+    execution.error = (
+        "IntegrityError: (psycopg.errors.UniqueViolation) duplicate key value "
+        'violates unique constraint "uq_purchase_orders_number" DETAIL: Key '
+        "(number)=(PO-00042) already exists. [SQL: INSERT INTO purchase_orders "
+        "(id, number, supplier_id) VALUES (...)]"
+    )
+    session.flush()
+
+    body = client.get(f"/api/v1/proposals/{created.id}", headers=headers).json()
+    text = json.dumps(body)
+    assert "uq_purchase_orders_number" not in text, "constraint name leaked"
+    assert "INSERT INTO" not in text, "SQL leaked"
+    assert "IntegrityError" in text, "the operator still learns what kind of failure"
