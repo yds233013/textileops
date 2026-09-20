@@ -39,6 +39,7 @@ from textileops.ai.schemas import (
     SupplierMessageExtraction,
 )
 from textileops.ai.telemetry import record_call
+from textileops.core.config import settings
 from textileops.core.errors import ValidationError
 from textileops.core.logging import get_logger
 from textileops.core.units import parse_unit
@@ -641,6 +642,35 @@ def _apply_message_claim(
     if claim.intent != MessageIntent.SUPPLIER_DELAY:
         outcome.notes.append(
             f"Message classified as {claim.intent.value}; no automatic state change applies."
+        )
+        return False
+
+    # Pilot mode: the deterministic checks below still run and their verdict is
+    # still recorded, but the change itself waits for a person. This is the
+    # single autonomous state change in the system — a supplier's email moving
+    # a delivery date — and it is exactly the one a business wants to watch for
+    # a while before letting it happen on its own.
+    if settings.pilot_mode:
+        fact.status = FactStatus.NEEDS_REVIEW
+        fact.review_reason = (
+            "Pilot mode: TextileOps does not change delivery dates by itself. "
+            "Confirm this and it will be applied."
+        )
+        _open_reconciliation(
+            session,
+            message=message,
+            fact=fact,
+            kind="pilot_mode_hold",
+            question=(
+                "This message looks like a supplier delay. TextileOps is in "
+                "pilot mode, so it has not moved any dates — does this look "
+                "right, and which purchase order does it refer to?"
+            ),
+            candidates=[],
+        )
+        outcome.reconciliation_items += 1
+        outcome.notes.append(
+            "Pilot mode: extracted for review rather than applied."
         )
         return False
 

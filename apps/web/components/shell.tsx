@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { clearSession, getStoredUser, getToken } from "@/lib/api";
 import type { User } from "@/lib/types";
+import { PilotModeBanner } from "./pilot";
 import { GlobalSearch } from "./search";
 import { SideNav } from "./nav";
 import { Button } from "./ui";
@@ -49,6 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         Skip to content
       </a>
+      <PilotModeBanner />
       <header className="sticky top-0 z-30 border-b border-ink-200 bg-white">
         <div className="flex items-center gap-3 px-4 py-2.5">
           <button

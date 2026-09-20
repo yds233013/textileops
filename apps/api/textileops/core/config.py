@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     worker_max_attempts: int = 3
 
     # --- Engine tuning (business policy, not magic numbers in code) ---
+    #: First-contact-with-real-data mode. TextileOps still ingests, reconciles,
+    #: calculates, detects and proposes; what it stops doing is changing
+    #: anything by itself. Every claim extracted from a supplier's message
+    #: becomes something a person confirms rather than something that quietly
+    #: moves a delivery date, and no action executes without a named human
+    #: approval behind it.
+    #:
+    #: Enforced in the services, not in the routes or the UI — a mode that can
+    #: be stepped around with a curl command is a label, not a control.
+    pilot_mode: bool = False
+
     order_at_risk_buffer_days: int = 3
     po_late_grace_days: int = 0
     supplier_delay_warn_days: int = 2

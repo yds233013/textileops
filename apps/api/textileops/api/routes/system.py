@@ -52,6 +52,9 @@ class IntegrationStatus(BaseModel):
 
 class SettingsResponse(BaseModel):
     environment: str
+    #: True while TextileOps is deliberately not changing anything by itself.
+    pilot_mode: bool
+    pilot_mode_note: str
     simulation_enabled: bool
     ai_enabled: bool
     ai_model: str | None
@@ -69,6 +72,16 @@ def read_settings(_user: CurrentUser) -> SettingsResponse:
     """What is actually configured. Integrations that do not exist say so."""
     return SettingsResponse(
         environment=settings.environment,
+        pilot_mode=settings.pilot_mode,
+        pilot_mode_note=(
+            "TextileOps is ingesting, reconciling, calculating and proposing, "
+            "but will not change a delivery date, a purchase order or stock by "
+            "itself. Every change waits for someone to confirm it."
+            if settings.pilot_mode
+            else "TextileOps applies confirmed supplier date changes automatically "
+            "once they pass the deterministic checks. Consequential actions "
+            "still require approval."
+        ),
         simulation_enabled=settings.enable_simulation and not settings.is_production,
         ai_enabled=settings.ai_enabled,
         ai_model=settings.ai_model if settings.ai_enabled else "deterministic-rules-v1",

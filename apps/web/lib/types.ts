@@ -704,6 +704,9 @@ export interface Integration {
 
 export interface Settings {
   environment: string;
+  /** True while TextileOps is deliberately not changing anything by itself. */
+  pilot_mode: boolean;
+  pilot_mode_note: string;
   simulation_enabled: boolean;
   ai_enabled: boolean;
   ai_model: string | null;

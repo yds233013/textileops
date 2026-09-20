@@ -295,3 +295,37 @@ Worth noting how it surfaced: the `produced_within_ordered` CHECK added in
 Phase 2 turned what would have been a silently negative outstanding figure
 into a loud failure.
 
+## Phase 19 — Pilot mode
+
+The point of a pilot is that a real business is deciding whether to trust
+this, and the fastest way to lose that is for it to move a delivery date
+nobody asked it to move.
+
+**What pilot mode stops.** Auditing for autonomous state changes found exactly
+one path: `_apply_message_claim` lets a supplier's own email revise a purchase
+order's ETA with no human involved. It is well gated already — the sender must
+be that order's supplier, the date must parse, the confidence must clear a
+floor, the move must be later — but "well gated" and "watched for a month" are
+different standards, and a pilot wants the second.
+
+In pilot mode that claim is still extracted, still scored, still attached to
+its evidence, and then **held as a reconciliation item** for someone to
+confirm. Nothing is discarded; nothing moves on its own.
+
+**Execution.** `actions.execute` additionally requires an `Approval` row with
+a real `decided_by_user_id`. A status column reading APPROVED is not a person
+approving, and the bypass test sets exactly that and confirms it is refused.
+
+**What pilot mode deliberately does not stop:** ingestion, reconciliation,
+every deterministic calculation, exception detection, AI investigation,
+proposals, and human-approved execution. A pilot where detection is also
+switched off proves nothing about whether the system would have been useful —
+so there is a test for that too.
+
+**Enforced in the services**, not the routes or the UI. The banner is a report
+of the server's setting; a mode that can be stepped around with a curl command
+is a label rather than a control. Default is off, so nobody discovers they
+were in pilot mode by accident: `TEXTILEOPS_PILOT_MODE=true` turns it on.
+
+10 backend tests, 3 frontend.
+

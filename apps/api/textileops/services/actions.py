@@ -29,11 +29,13 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from textileops.core.config import settings
 from textileops.core.db import lock_row
 from textileops.core.errors import (
     ConflictError,
     IllegalStateTransition,
     NotFoundError,
+    PilotModeRestriction,
     ValidationError,
 )
 from textileops.core.logging import get_logger
@@ -407,6 +409,27 @@ def execute(
         raise IllegalStateTransition(
             f"Proposal {proposal.code} must be approved before it can be executed."
         )
+
+    # In pilot mode an action needs a named person behind it, not merely a
+    # status that says APPROVED. The status is a column; a person is a
+    # decision, and during a pilot that distinction is the whole point.
+    if settings.pilot_mode:
+        approver = next(
+            (
+                approval
+                for approval in proposal.approvals
+                if approval.decision == ApprovalDecision.APPROVED
+                and approval.decided_by_user_id is not None
+            ),
+            None,
+        )
+        if approver is None:
+            raise PilotModeRestriction(
+                f"Pilot mode: {proposal.code} has no recorded human approval, so "
+                "TextileOps will not carry it out. Approve it in the proposals "
+                "queue and it will run.",
+                details={"proposal": proposal.code, "status": proposal.status.value},
+            )
 
     attempt = len(proposal.executions) + 1
     key = f"proposal:{proposal.id}:attempt-{attempt}"

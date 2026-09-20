@@ -64,3 +64,12 @@ class AIProviderError(TextileOpsError):
 class ExtractionValidationError(TextileOpsError):
     status_code = 422
     code = "extraction_validation_error"
+
+
+class PilotModeRestriction(ConflictError):
+    """Refused because TextileOps is running in pilot mode.
+
+    Not a failure: the system is deliberately declining to change something by
+    itself while a real business is still deciding whether to trust it. The
+    message always says what a person can do instead.
+    """
