@@ -239,6 +239,26 @@ def convert(value: Decimal, frm: UnitOfMeasure, to: UnitOfMeasure) -> Decimal:
     # recorded anyway. 29.703 kg into tonnes loses 297 grams, which it plainly
     # could — that is real yarn, and rounding it away in a ledger is not a
     # precision question but a stock question.
+    # Stated separately because it is the unambiguous case and because the
+    # proportional rule below misses it by a hair's breadth: 0.001 g in pounds
+    # loses 0.00099999… of a gram, which is not quite one whole step, so the
+    # comparison passed and the gram vanished. Found by Hypothesis, on a run
+    # where it happened to try that pair.
+    if converted == 0 and Decimal(str(value)) != 0:
+        raise UnitMismatchError(
+            f"{value} {frm.value} is smaller than the smallest quantity "
+            f"TextileOps can record in {to.value}, so converting it would "
+            "leave nothing at all. Record it in a finer unit.",
+            details={
+                "from": frm.value,
+                "to": to.value,
+                "value": str(value),
+                "exact": str(exact),
+                "storable": str(converted),
+                "lost": str(value),
+            },
+        )
+
     lost_in_source = abs(exact - converted) * _TO_BASE[to] / _TO_BASE[frm]
     # ``>=``, not ``>``. Losing exactly one whole step of the source unit is
     # not a rounding artefact: a milligram expressed in kilograms loses

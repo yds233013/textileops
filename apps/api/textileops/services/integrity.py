@@ -24,10 +24,13 @@ from sqlalchemy.orm import Session
 from textileops.models.actions import ActionProposal, Approval, Execution
 from textileops.models.enums import (
     ApprovalDecision,
+    EntityType,
     ExceptionStatus,
     ExecutionStatus,
     LotStatus,
+    MovementType,
     ProposalStatus,
+    QCOutcome,
     ReservationStatus,
     SalesOrderStatus,
     ShipmentStatus,
@@ -319,35 +322,45 @@ def _check_reservations(session: Session, report: IntegrityReport) -> None:
 
 
 def _check_rejected_stock_not_sellable(session: Session, report: IntegrityReport) -> None:
-    """Cloth a QC inspection rejected must not sit in the available pool."""
-    rejected_lots = session.execute(
-        select(QCInspection, InventoryLot)
-        .join(InventoryLot, InventoryLot.production_batch_id == QCInspection.production_batch_id)
-        .where(
-            QCInspection.rejected_quantity > ZERO,
-            InventoryLot.status == LotStatus.AVAILABLE,
-            InventoryLot.quantity_on_hand > ZERO,
-        )
-    ).all()
-    seen: set[str] = set()
-    for inspection, lot in rejected_lots:
-        if lot.lot_code in seen:
+    """Cloth an inspection rejected must have left the books.
+
+    This used to assert that the batch's output lot was *not* available, which
+    was right only while a rejection quarantined the whole lot. It does not
+    any more, and should not: an inspection that accepts 700 of 1,000 metres
+    is saying the 700 are good, and stranding them helps nobody.
+
+    What has to be true is narrower and stronger — the rejected quantity was
+    actually scrapped. A REWORK is excluded: that cloth is expected back from
+    the dyehouse, so it is quarantined rather than destroyed.
+    """
+    for inspection in session.scalars(
+        select(QCInspection).where(QCInspection.rejected_quantity > ZERO)
+    ).all():
+        if inspection.outcome == QCOutcome.REWORK:
             continue
-        seen.add(lot.lot_code)
+        scrapped = session.scalar(
+            select(func.coalesce(func.sum(InventoryMovement.quantity_delta), ZERO)).where(
+                InventoryMovement.movement_type == MovementType.SCRAP,
+                InventoryMovement.reference_type == EntityType.QC_INSPECTION,
+                InventoryMovement.reference_id == inspection.id,
+            )
+        ) or ZERO
+        removed = -scrapped
+        if removed >= inspection.rejected_quantity:
+            continue
         report.findings.append(
             Finding(
                 check="rejected_stock_available",
                 severity="high",
-                entity=lot.lot_code,
+                entity=inspection.code,
                 detail=(
-                    "A QC inspection rejected part of this batch, but the output "
-                    "lot is still available to ship. Check the rejection was "
-                    "propagated."
+                    "The inspection rejected cloth that was never scrapped, so "
+                    "it is still on the books and can still be shipped."
                 ),
                 values={
-                    "inspection": inspection.code,
                     "rejected": inspection.rejected_quantity,
-                    "lot_on_hand": lot.quantity_on_hand,
+                    "scrapped": removed,
+                    "short_by": inspection.rejected_quantity - removed,
                 },
             )
         )

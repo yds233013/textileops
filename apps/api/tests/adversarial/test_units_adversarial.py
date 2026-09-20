@@ -35,9 +35,11 @@ def test_a_quantity_too_small_for_the_target_unit_is_refused_not_rounded_away():
     with pytest.raises(UnitMismatchError) as exc:
         convert(D("1"), UnitOfMeasure.GRAM, UnitOfMeasure.TONNE)
 
-    assert "losing 1.000 g" in str(exc.value), "the refusal must name what is lost"
+    # Total annihilation gets its own message: "would leave nothing at all"
+    # is more use to an operator than a figure equal to what they typed.
+    assert "leave nothing at all" in str(exc.value)
     assert exc.value.details["value"] == "1"
-    assert exc.value.details["lost"] == "1.000"
+    assert exc.value.details["storable"] == "0.000"
 
 
 def test_a_quantity_that_would_be_rounded_UP_is_refused_too():

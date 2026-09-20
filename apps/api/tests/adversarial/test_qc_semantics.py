@@ -277,3 +277,52 @@ def test_a_passing_reinspection_cancels_the_replacement_it_no_longer_needs(
         f"the cancelled replacement still holds {held_after} reservation(s) "
         f"(was {held_before})"
     )
+
+
+def test_the_integrity_checker_catches_a_rejection_that_was_never_scrapped(
+    session, produced
+):
+    """The check, verified against the state it exists to find.
+
+    It used to assert the batch's output lot was *not* available, which was
+    right only while a rejection quarantined the whole lot. That stopped being
+    true when partial acceptance started releasing the good portion — so the
+    check had to become narrower and stronger: the rejected quantity must
+    actually have left the books.
+    """
+    from textileops.services import integrity
+
+    _order, batch = produced
+    inspection = quality.record_inspection(
+        session,
+        code=f"QC-{uuid.uuid4().hex[:8].upper()}",
+        outcome=QCOutcome.REJECT,
+        inspected_quantity=D("1000"),
+        accepted_quantity=D("700"),
+        rejected_quantity=D("300"),
+        unit=UnitOfMeasure.METRE,
+        production_batch_id=batch.id,
+    )
+    # Deliberately NOT propagated: this is the state where somebody recorded a
+    # rejection and the stock never moved.
+    session.flush()
+
+    report = integrity.run(session, only=["rejected_stock_available"])
+    assert [f.entity for f in report.findings] == [inspection.code]
+    assert report.findings[0].values["short_by"] == D("300.000")
+
+    quality.propagate(session, inspection)
+    session.flush()
+
+    assert integrity.run(session, only=["rejected_stock_available"]).ok, (
+        "a properly propagated rejection is still being reported"
+    )
+
+
+def test_the_checker_does_not_flag_rework_as_unscrapped(session, produced):
+    """Rework cloth is quarantined, not destroyed, and that is correct."""
+    from textileops.services import integrity
+
+    _order, batch = produced
+    _inspect(session, batch, QCOutcome.REWORK, "0", "1000")
+    assert integrity.run(session, only=["rejected_stock_available"]).ok
