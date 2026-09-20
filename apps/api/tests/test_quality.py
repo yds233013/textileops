@@ -88,11 +88,22 @@ def test_a_shade_rejection_quarantines_stock_and_schedules_a_replacement(
 
     assert inspection.failed
     assert propagation.replacement_batch_code is not None
-    assert propagation.lots_quarantined
     assert batch.status in (ProductionStatus.REJECTED, ProductionStatus.REWORK)
-    # The rejected metres are scrapped out of stock, not quietly left sellable.
+
+    # This expectation changed, deliberately. It used to require the whole lot
+    # to stay quarantined and `fabric_available` to be zero — which is what
+    # the code did, and it was wrong: the inspector explicitly accepted
+    # 2,000 m of the 5,000. Stranding that in quarantine left the order short
+    # with nothing planned to make up the difference, and only a manual
+    # re-inspection could ever release it.
+    #
+    # The 3,000 rejected metres are scrapped out of stock, and the 2,000 the
+    # inspector passed are sellable, because that is what the inspection says.
     available, _ = inventory.fabric_available(session, fabric.id)
-    assert available == D("0.000")
+    assert available == D("2000.000"), (
+        "cloth QC explicitly accepted must not be stranded in quarantine"
+    )
+    assert propagation.lots_released, "the accepted portion was never released"
 
     assessment = orders.assess_order(session, order)
     assert assessment.qc_status == "rejected"

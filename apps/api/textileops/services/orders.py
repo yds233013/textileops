@@ -264,9 +264,14 @@ def assess_order(
         for batch in line_batches:
             if batch.output_quantity > ZERO:
                 inspectable_batches += 1
-            for inspection in session.scalars(
-                select(QCInspection).where(QCInspection.production_batch_id == batch.id)
-            ).all():
+            # Only the inspection that still stands. A batch that failed, was
+            # reworked and passed on re-inspection used to keep its failure
+            # for ever, because this reduced over *every* inspection ever
+            # attached to the batch and REJECT wins any such reduction. The
+            # exception engine already follows the re-inspection chain to
+            # close the exception, so the order screen and the exception list
+            # actively contradicted each other.
+            for inspection in _current_inspections(session, batch.id):
                 qc_outcomes.append(inspection.outcome)
 
         if to_produce <= ZERO:
@@ -483,6 +488,24 @@ def _production_status(statuses: list[ProductionStatus]) -> str:
     return "planned"
 
 
+def _current_inspections(session: Session, batch_id: uuid.UUID) -> list[QCInspection]:
+    """The inspections for a batch that have not been superseded.
+
+    An inspection is superseded when a later one names it as the thing it is a
+    re-inspection of. What is left is the current verdict, which is what the
+    order's badge should reflect.
+    """
+    inspections = list(
+        session.scalars(
+            select(QCInspection).where(QCInspection.production_batch_id == batch_id)
+        ).all()
+    )
+    superseded = {
+        i.reinspection_of_id for i in inspections if i.reinspection_of_id is not None
+    }
+    return [i for i in inspections if i.id not in superseded]
+
+
 def _qc_status(
     outcomes: list[QCOutcome], *, batches_with_output: int, open_batches: int
 ) -> str:
@@ -502,10 +525,13 @@ def _qc_status(
         return "rework"
     if QCOutcome.PENDING in outcomes:
         return "pending"
-    if QCOutcome.CONDITIONAL_PASS in outcomes:
-        return "conditional_pass"
+    # "Partially inspected" is checked *before* conditional pass. One batch
+    # passed with a note and two never looked at is not "conditionally
+    # passed" — the honest answer is that the looking is not finished.
     if open_batches > 0 or batches_with_output > len(outcomes):
         return "partially_inspected"
+    if QCOutcome.CONDITIONAL_PASS in outcomes:
+        return "conditional_pass"
     return "passed"
 
 

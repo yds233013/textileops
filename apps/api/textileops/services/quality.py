@@ -15,7 +15,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from textileops.core.errors import ValidationError
+from textileops.core.errors import ConflictError, ValidationError
 from textileops.core.units import UnitOfMeasure, convert, quantize
 from textileops.models.enums import (
     EntityType,
@@ -113,6 +113,38 @@ def record_inspection(
             "Accepted plus rejected quantity cannot exceed the inspected quantity."
         )
 
+    # A batch has one current inspection. A second one is either an explicit
+    # re-inspection — which says so — or a mistake, and the commonest mistake
+    # is a double-submitted form.
+    #
+    # That is not a harmless duplicate. `_scrap_rejected` keys its idempotency
+    # on the *inspection*, so a second inspection saying the same thing scraps
+    # the same cloth again: two submissions of "1,000 inspected, 300 rejected"
+    # destroy 600 m on the books for a 300 m rejection, and a SCRAP movement
+    # has no correction path. It also raises a second replacement batch, which
+    # takes its own material reservations for yarn nobody needs.
+    if production_batch_id is not None and reinspection_of_id is None:
+        existing = session.scalars(
+            select(QCInspection).where(
+                QCInspection.production_batch_id == production_batch_id
+            )
+        ).all()
+        superseded = {
+            i.reinspection_of_id for i in existing if i.reinspection_of_id is not None
+        }
+        current = [i for i in existing if i.id not in superseded]
+        if current:
+            raise ConflictError(
+                f"Batch already has inspection {current[-1].code} recorded against "
+                "it. If this is a fresh look after rework, record it as a "
+                "re-inspection of that one; if it is a repeat of the same "
+                "submission, it has already been saved.",
+                details={
+                    "existing_inspection": current[-1].code,
+                    "existing_outcome": current[-1].outcome.value,
+                },
+            )
+
     inspection = QCInspection(
         code=code,
         production_batch_id=production_batch_id,
@@ -179,6 +211,7 @@ def propagate(
     """
     quarantined: list[str] = []
     released: list[str] = []
+    cancelled_replacements: list[str] = []
     replacement_code: str | None = None
     batch: ProductionBatch | None = None
     if inspection.production_batch_id:
@@ -186,77 +219,158 @@ def propagate(
 
     lots = _target_lots(session, inspection)
 
-    if inspection.outcome in (QCOutcome.PASS, QCOutcome.CONDITIONAL_PASS):
-        for lot in lots:
-            if lot.status == LotStatus.QUARANTINE:
-                lot.status = LotStatus.AVAILABLE
-                released.append(lot.lot_code)
-    elif inspection.outcome in BLOCKING_OUTCOMES:
+    # The consequences follow the *quantities*, not the headline outcome.
+    #
+    # `record_inspection` stores an accepted and a rejected figure because a
+    # real inspection is "of the 1,000 m, 700 is good and 300 is off-shade".
+    # This used to branch on the outcome enum alone and ignore both:
+    #
+    #  * a conditional pass with 300 m rejected released all 1,000 m into the
+    #    sellable pool, and dispatch would load the rejected cloth onto the
+    #    lorry;
+    #  * a reject with 700 m accepted quarantined the lot entire, so cloth QC
+    #    had explicitly passed became invisible to allocation and to dispatch,
+    #    the order was short with nothing planned to make up the difference,
+    #    and only a manual re-inspection could recover it.
+    #
+    # Both are the same mistake read from opposite ends.
+    if inspection.outcome in BLOCKING_OUTCOMES:
         for lot in lots:
             if lot.status in (LotStatus.AVAILABLE, LotStatus.QUARANTINE):
                 lot.status = LotStatus.QUARANTINE
                 quarantined.append(lot.lot_code)
-        if inspection.outcome == QCOutcome.REJECT and inspection.rejected_quantity > ZERO:
-            # Once for the inspection, spread across its lots — not once per
-            # lot, which would destroy the rejected quantity several times over.
-            _scrap_rejected(session, lots, inspection)
 
-        if batch is not None:
-            target = (
-                ProductionStatus.REWORK
-                if inspection.outcome == QCOutcome.REWORK
-                else ProductionStatus.REJECTED
+    # Bad cloth leaves the building whatever the label says — except on
+    # REWORK, where the cloth is expected to be recoverable and scrapping it
+    # would destroy something the mill intends to put back through the dyehouse.
+    if inspection.rejected_quantity > ZERO and inspection.outcome != QCOutcome.REWORK:
+        # Once for the inspection, spread across its lots — not once per
+        # lot, which would destroy the rejected quantity several times over.
+        _scrap_rejected(session, lots, inspection)
+
+    # Good cloth is released whatever the label says. After the scrap above,
+    # what remains in these lots is what the inspector accepted, so releasing
+    # the lot releases exactly that.
+    if (
+        inspection.outcome in (QCOutcome.PASS, QCOutcome.CONDITIONAL_PASS)
+        or inspection.accepted_quantity > ZERO
+    ) and inspection.outcome != QCOutcome.REWORK:
+        for lot in lots:
+            if lot.status == LotStatus.QUARANTINE and lot.quantity_on_hand > ZERO:
+                lot.status = LotStatus.AVAILABLE
+                released.append(lot.lot_code)
+                if lot.lot_code in quarantined:
+                    quarantined.remove(lot.lot_code)
+
+    # A passing re-inspection ends the rework. Nothing made this transition
+    # before, so a batch that failed, was reworked and then passed stayed in
+    # REWORK for ever — an open status, so the order it belongs to went on
+    # reporting itself as still being inspected while its QC verdict said
+    # otherwise. REWORK -> COMPLETED was already legal; it was simply never
+    # taken.
+    if (
+        batch is not None
+        and inspection.reinspection_of_id is not None
+        and inspection.outcome in (QCOutcome.PASS, QCOutcome.CONDITIONAL_PASS)
+        and ProductionStatus.COMPLETED in production.TRANSITIONS.get(batch.status, set())
+    ):
+        batch.status = ProductionStatus.COMPLETED
+        record_audit(
+            session,
+            action="production.qc_outcome_applied",
+            entity_type=EntityType.PRODUCTION_BATCH,
+            entity_id=batch.id,
+            summary=(
+                f"Batch {batch.code} passed re-inspection {inspection.code}; "
+                "rework complete."
+            ),
+            actor_type="user" if user_id else "system",
+            actor_user_id=user_id,
+        )
+        # The replacement the failure raised is no longer needed. Left
+        # standing it would hold material reservations for cloth nobody is
+        # going to make, which inflates every shortage and purchase
+        # recommendation computed from them — and nothing else would ever
+        # close it, because a batch cannot be cancelled from anywhere else.
+        for replacement in session.scalars(
+            select(ProductionBatch).where(
+                ProductionBatch.rework_of_batch_id == batch.id,
+                ProductionBatch.status.in_(production.OPEN_STATUSES),
             )
-            if target in production.TRANSITIONS.get(batch.status, set()):
-                batch.status = target
-                record_audit(
-                    session,
-                    action="production.qc_outcome_applied",
-                    entity_type=EntityType.PRODUCTION_BATCH,
-                    entity_id=batch.id,
-                    summary=(
-                        f"Batch {batch.code} moved to {target.value} following QC "
-                        f"{inspection.code}."
-                    ),
-                    actor_type="user" if user_id else "system",
-                    actor_user_id=user_id,
-                )
-            else:
-                # The batch is in a state this outcome cannot act on (a reject
-                # against a batch that never ran, say). Saying nothing would
-                # leave its reservations locked for ever and report the old
-                # status as though it were the result.
-                production.add_event(
-                    session,
-                    batch,
-                    ProductionEventType.NOTE,
-                    note=(
-                        f"QC {inspection.code} returned {inspection.outcome.value}, but "
-                        f"batch {batch.code} is {batch.status.value} and cannot move to "
-                        f"{target.value}. Needs an operator."
-                    ),
-                    user_id=user_id,
-                )
-            # A rejected batch will never consume the materials it reserved.
-            production.release_materials_if_terminal(session, batch)
+        ).all():
+            replacement.status = ProductionStatus.CANCELLED
+            freed = production.release_materials_if_terminal(session, replacement)
+            cancelled_replacements.append(replacement.code)
+            record_audit(
+                session,
+                action="production.replacement_cancelled",
+                entity_type=EntityType.PRODUCTION_BATCH,
+                entity_id=replacement.id,
+                summary=(
+                    f"Replacement batch {replacement.code} cancelled: "
+                    f"{batch.code} passed re-inspection {inspection.code}. "
+                    f"{freed} material reservation(s) released."
+                ),
+                actor_type="user" if user_id else "system",
+                actor_user_id=user_id,
+            )
+
+    if inspection.outcome in BLOCKING_OUTCOMES and batch is not None:
+        target = (
+            ProductionStatus.REWORK
+            if inspection.outcome == QCOutcome.REWORK
+            else ProductionStatus.REJECTED
+        )
+        if target in production.TRANSITIONS.get(batch.status, set()):
+            batch.status = target
+            record_audit(
+                session,
+                action="production.qc_outcome_applied",
+                entity_type=EntityType.PRODUCTION_BATCH,
+                entity_id=batch.id,
+                summary=(
+                    f"Batch {batch.code} moved to {target.value} following QC "
+                    f"{inspection.code}."
+                ),
+                actor_type="user" if user_id else "system",
+                actor_user_id=user_id,
+            )
+        else:
+            # The batch is in a state this outcome cannot act on (a reject
+            # against a batch that never ran, say). Saying nothing would
+            # leave its reservations locked for ever and report the old
+            # status as though it were the result.
             production.add_event(
                 session,
                 batch,
-                ProductionEventType.REJECTED
-                if inspection.outcome == QCOutcome.REJECT
-                else ProductionEventType.REWORK_STARTED,
-                note=f"QC {inspection.code}: {inspection.outcome.value}.",
+                ProductionEventType.NOTE,
+                note=(
+                    f"QC {inspection.code} returned {inspection.outcome.value}, but "
+                    f"batch {batch.code} is {batch.status.value} and cannot move to "
+                    f"{target.value}. Needs an operator."
+                ),
                 user_id=user_id,
             )
-            if schedule_replacement and inspection.rejected_quantity > ZERO:
-                replacement = production.create_rework_batch(
-                    session,
-                    batch,
-                    quantity=convert(inspection.rejected_quantity, inspection.unit, batch.unit),
-                    code=_next_rework_code(session, batch.code),
-                    user_id=user_id,
-                )
-                replacement_code = replacement.code
+        # A rejected batch will never consume the materials it reserved.
+        production.release_materials_if_terminal(session, batch)
+        production.add_event(
+            session,
+            batch,
+            ProductionEventType.REJECTED
+            if inspection.outcome == QCOutcome.REJECT
+            else ProductionEventType.REWORK_STARTED,
+            note=f"QC {inspection.code}: {inspection.outcome.value}.",
+            user_id=user_id,
+        )
+        if schedule_replacement and inspection.rejected_quantity > ZERO:
+            replacement = production.create_rework_batch(
+                session,
+                batch,
+                quantity=convert(inspection.rejected_quantity, inspection.unit, batch.unit),
+                code=_next_rework_code(session, batch.code),
+                user_id=user_id,
+            )
+            replacement_code = replacement.code
 
     affected = _affected_order_numbers(session, batch)
     session.flush()

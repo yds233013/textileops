@@ -619,3 +619,51 @@ FIFO. Both now order by `received_at, id`. `issue_materials` had the same
 latent gap (`received_at` alone is not a total order when one delivery makes
 several lots on a day).
 
+### QC semantics — one root cause, four defects (Reviewer A)
+
+`record_inspection` stores an accepted *and* a rejected quantity, because a
+real inspection is "of the 1,000 metres, 700 are good and 300 are off-shade".
+`propagate` branched on the **outcome label** and read neither. The two
+directions of that mistake:
+
+- **A1 (high)** — a conditional pass with 300 m rejected flipped *every* lot
+  to AVAILABLE and gated the scrap on the outcome being REJECT, so the
+  rejected cloth went into the sellable pool and dispatch would load it.
+- **A2 (high)** — a reject with 700 m accepted quarantined the lot entire, so
+  cloth QC had explicitly passed became invisible to allocation and dispatch:
+  the order short, nothing planned to make up the difference, and only a
+  manual re-inspection able to recover it.
+
+*Fix:* consequences follow the quantities. Rejected cloth is scrapped whatever
+the label says — except on REWORK, where it is expected back from the dyehouse
+and scrapping would destroy it. What remains after the scrap is what the
+inspector accepted, so releasing the lot releases exactly that.
+
+An existing test asserted the A2 behaviour (whole lot quarantined,
+`fabric_available == 0`). That expectation was the defect, not the
+implementation, so it was changed — with the reasoning written into the test.
+
+- **A3 (high)** — `_scrap_rejected` keys idempotency on the *inspection*, so a
+  double-submitted form creates a second inspection that scraps the same cloth
+  again: **600 m destroyed for a 300 m rejection**, with no correction path for
+  a SCRAP movement, plus a second replacement batch holding its own
+  reservations. A batch now has one current inspection; a second must declare
+  itself a re-inspection.
+- **A4 (medium)** — `_qc_status` reduced over *every* inspection ever attached
+  to a batch, and REJECT wins any such reduction, so a batch that failed, was
+  reworked and passed carried its failure for life — while the exception
+  engine, which does follow the re-inspection chain, had already closed the
+  exception. The badge now reads the inspection that still stands.
+
+Found while fixing A4, and worse than it: **a passing re-inspection ended
+nothing.** `REWORK → COMPLETED` was a legal transition nothing ever took, so
+the batch stayed open; and the replacement batch the failure had raised was
+never closed, holding material reservations for cloth nobody was going to
+make and inflating every shortage computed from them. Both are now closed by
+the passing re-inspection, with the released reservation count in the audit
+summary.
+
+Also corrected: `partially_inspected` is now tested *before* conditional pass.
+One batch passed with a note and two never looked at is not "conditionally
+passed" — the looking is not finished.
+
