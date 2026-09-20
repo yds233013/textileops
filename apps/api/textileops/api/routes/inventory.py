@@ -78,6 +78,9 @@ class AllocationOut(BaseModel):
     covered_quantity: Decimal
     shortfall_quantity: Decimal
     covered_by_date: dt.date | None
+    #: "stock" | "incoming" | "uncovered" — disambiguates a null
+    #: covered_by_date, which otherwise reads as "from stock".
+    coverage_source: str
     is_short: bool
     is_late: bool
     sales_order_id: uuid.UUID | None
@@ -250,6 +253,7 @@ def material_coverage(
                 covered_quantity=a.covered_quantity,
                 shortfall_quantity=a.shortfall_quantity,
                 covered_by_date=a.covered_by_date,
+                coverage_source=a.coverage_source,
                 is_short=a.is_short,
                 is_late=a.is_late,
                 sales_order_id=a.sales_order_id,

@@ -19,6 +19,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -190,4 +191,24 @@ class InventoryReservation(Base, TimestampMixin):
         CheckConstraint("quantity > 0", name="reservation_quantity_positive"),
         Index("ix_reservations_material_status", "material_id", "status"),
         Index("ix_reservations_spec_status", "fabric_spec_id", "status"),
+        # A batch's material requirement already has uq_batch_material; its
+        # mirror reservation had nothing, so re-exploding a batch's bill of
+        # materials could leave two active reservations for the same material
+        # and quietly halve the stock the rest of the business can see.
+        Index(
+            "uq_active_reservation_per_batch_material",
+            "production_batch_id",
+            "material_id",
+            unique=True,
+            postgresql_where=text("status = 'active' and production_batch_id is not null"),
+        ),
+        # Releasing a reservation without stamping when is how a released row
+        # comes to look active again to anything reading timestamps.
+        CheckConstraint(
+            "status <> 'released' or released_at is not null",
+            name="reservation_released_has_timestamp",
+        ),
+        # Covers release_reservations(production_batch_id=...), which runs on
+        # every batch completion and cancellation and was a sequential scan.
+        Index("ix_reservations_batch_status", "production_batch_id", "status"),
     )

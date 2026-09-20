@@ -19,6 +19,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from textileops.core.db import lock_row
 from textileops.core.errors import ValidationError
 from textileops.core.units import UnitOfMeasure, convert, quantize
 from textileops.models.enums import (
@@ -127,6 +128,16 @@ def receive(
         raise ValidationError("Receipt quantities cannot be negative.")
     if accepted + rejected <= ZERO:
         raise ValidationError("A receipt must record some quantity.")
+
+    # Serialise receipts against this line. ``received_quantity`` is
+    # accumulated read-modify-write and ``_next_lot_code`` is a count(*) + 1,
+    # so two deliveries keyed in at the same moment either both compute the
+    # same lot code (one insert dies on the unique index and a whole delivery
+    # is lost) or both write the same total (the line claims 500 kg received
+    # when 1000 kg is physically in the warehouse, and the phantom 500 kg of
+    # outstanding supply never clears). Locking the line first makes both
+    # sequences well defined.
+    lock_row(session, line)
 
     if idempotency_key:
         existing = session.scalar(
@@ -357,3 +368,22 @@ def recompute_supplier_on_time_rate(
     rate = (Decimal(on_time) / Decimal(assessed)).quantize(Decimal("0.0001"))
     supplier.on_time_rate = rate
     return rate
+
+
+def recompute_all_supplier_rates(session: Session) -> int:
+    """Re-score every supplier. Returns how many rates changed.
+
+    ``recompute_supplier_on_time_rate`` was only ever called from ``receive``,
+    which means a supplier's score could only move when they *delivered*. The
+    commonest way to be late is to send nothing at all, and that path updated
+    no score: a supplier whose promised date quietly passed kept whatever
+    rating their last delivery earned them, and the procurement screen went on
+    recommending them.
+    """
+    changed = 0
+    for supplier in session.scalars(select(Supplier)).all():
+        before = supplier.on_time_rate
+        after = recompute_supplier_on_time_rate(session, supplier)
+        if before != after:
+            changed += 1
+    return changed

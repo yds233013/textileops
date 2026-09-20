@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from textileops.core.config import settings
+from textileops.core.db import advisory_xact_lock
 from textileops.core.logging import get_logger
 from textileops.core.units import UnitOfMeasure
 from textileops.models.enums import (
@@ -1103,6 +1104,10 @@ def priority_score(detection: Detection, *, customer_tier: int = 5) -> int:
 
 def run(session: Session, *, request_id: str | None = None) -> EngineResult:
     """Recompute every exception. Idempotent: safe to run as often as you like."""
+    # Two passes must not overlap. ``workers/tasks.py`` enqueues a recompute on
+    # every processed document and message with no idempotency key, so
+    # overlapping passes are the normal case, not a rare one.
+    advisory_xact_lock(session, "exception_engine.run")
     result = EngineResult()
     detections: list[Detection] = []
     for detector in DETECTORS:
@@ -1241,6 +1246,14 @@ def run(session: Session, *, request_id: str | None = None) -> EngineResult:
     # --- auto-resolution --------------------------------------------------
     for key, exception in existing_by_key.items():
         if key in seen_keys:
+            continue
+        # This map was loaded at the top of the pass. An operator who resolved
+        # or dismissed the exception while the pass was running holds the more
+        # recent truth, and writing our stale copy over it would silently
+        # replace their decision with "automatically resolved".
+        session.refresh(exception)
+        if exception.status not in ACTIVE_EXCEPTION_STATUSES:
+            result.unchanged += 1
             continue
         exception.status = ExceptionStatus.RESOLVED
         exception.resolved_at = now

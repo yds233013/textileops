@@ -29,6 +29,7 @@ function makeCard(overrides: Partial<Card> = {}): Card {
     customers_affected: ["Meridian Apparel Ltd"],
     revenue_exposure: "10050.00",
     revenue_basis: "calculated",
+    revenue_note: null,
     currency: "GBP",
     detected_at: new Date().toISOString(),
     age_hours: 5,
@@ -53,6 +54,25 @@ describe("AttentionCard", () => {
     const marginChip = screen.getByText(/Margin exposure/);
     expect(marginChip.textContent).toMatch(/not available/i);
     expect(marginChip.textContent).not.toMatch(/\b0\b/);
+  });
+
+  it("says when revenue exposure is unavailable instead of going quiet", () => {
+    // Dropping the chip entirely made an exception of unknown cost look
+    // identical to one that costs nothing — the flattering reading.
+    render(
+      <AttentionCard
+        card={makeCard({
+          revenue_exposure: null,
+          revenue_basis: "unavailable",
+          revenue_note: "No unit prices are recorded on the affected order lines.",
+        })}
+      />,
+    );
+    const chip = screen.getByTitle(
+      "No unit prices are recorded on the affected order lines.",
+    );
+    expect(chip).toHaveTextContent(/revenue exposure/i);
+    expect(chip).toHaveTextContent(/not available/i);
   });
 
   it("shows revenue exposure with its currency", () => {

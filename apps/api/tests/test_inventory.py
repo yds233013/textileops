@@ -142,8 +142,17 @@ def test_releasing_reservations_frees_stock(session, yarn):
     session.flush()
     assert inventory.material_position(session, yarn.id).available == D("600.000")
 
-    reservation.status = ReservationStatus.RELEASED
+    # Released through the service rather than by assigning the column: a
+    # release also has to stamp released_at, and the database now enforces
+    # that, so a test that writes the status directly is testing a state the
+    # application can no longer produce.
+    released = inventory.release_reservations(
+        session, sales_order_line_id=None, production_batch_id=None
+    )
     session.flush()
+    assert released == 1
+    assert reservation.status == ReservationStatus.RELEASED
+    assert reservation.released_at is not None
     assert inventory.material_position(session, yarn.id).available == D("1000.000")
 
 

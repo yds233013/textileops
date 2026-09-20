@@ -29,6 +29,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from textileops.core.db import lock_row
 from textileops.core.errors import (
     ConflictError,
     IllegalStateTransition,
@@ -274,6 +275,14 @@ def approve(
     modified_payload: dict[str, Any] | None = None,
     execute_now: bool = True,
 ) -> tuple[Approval, Execution | None]:
+    # Lock the proposal before reading its status. Two operators clicking
+    # Approve at the same moment otherwise both pass ``_assert_actionable``:
+    # the audit trail ends up claiming two people each authorised the action,
+    # and the loser's write puts the status back to APPROVED after the winner
+    # set EXECUTED — so the queue shows work as still pending that has in fact
+    # already run, inviting somebody to approve it a third time.
+    lock_row(session, proposal)
+
     _assert_actionable(proposal)
     if modified_payload:
         validate_payload(proposal.action_type, modified_payload)

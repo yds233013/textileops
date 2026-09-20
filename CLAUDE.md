@@ -80,6 +80,38 @@ quietly gives a real business wrong numbers, so treat each as a hard rule.
 15. **Run tests, type checks and linting before declaring work complete.**
     `./scripts/verify.sh` runs all of it.
 
+16. **Any read-modify-write on a row another session can touch takes
+    `core.db.lock_row` first.** Read a balance, decide, write the new absolute
+    value — at READ COMMITTED that is a lost update, and the value that
+    survives is individually plausible, so no CHECK constraint can catch it.
+    Two sessions each issued 60 kg from a 100 kg lot and both succeeded.
+    Applies to `inventory.post_movement`, `procurement.receive` and
+    `actions.approve`; add it to anything new of the same shape. Lock rows in
+    a consistent order within a transaction or two of them will deadlock.
+
+17. **A conversion that would change a quantity is refused, not rounded.**
+    Quantities are stored to three decimal places. 0.5 kg written in tonnes
+    becomes 0.001 t, which reads back as a whole kilogram; 29.703 kg loses
+    297 g. `core.units.convert` raises when rounding into the target unit
+    would lose a whole step of the source unit. Never relax this to make a
+    call site pass — record the quantity in a finer unit instead.
+
+18. **A status is a claim about the physical world, and the evidence has to
+    exist.** An order is not `delivered` unless a shipment carrying it has a
+    confirmed arrival date; `orders.delivery_claim_discrepancies` enforces it
+    and `cli check` fails the build on it. The same rule is why the on-time
+    metric counts only orders it can actually measure and reports the
+    denominator.
+
+19. **Colour and wording in the UI are claims too.** Every status string the
+    API can emit needs a deliberate tone in `components/ui.tsx`; anything
+    missing falls back to neutral grey, which reads as "fine" — that is how a
+    QC *reject* came to render identically to *not applicable*.
+    `tests/statusTone.test.ts` checks the map against the backend enums. The
+    same rule forbids inventing a reason: when no proposal exists, say whether
+    the investigation recommended nothing or whether its recommendation was
+    refused, and never assert the flattering one.
+
 ---
 
 ## Layout
@@ -152,6 +184,19 @@ a route, it belongs in a service.
   `if TYPE_CHECKING:` so mypy can resolve the forward reference.
 * **Tests run against real PostgreSQL**, never SQLite: the schema depends on
   native enums, JSONB and `FOR UPDATE SKIP LOCKED`.
+* **A test that writes a column directly is testing a state the application
+  cannot produce.** Release a reservation through `inventory.release_reservations`,
+  not by assigning `status` — a release also stamps `released_at`, and the
+  database enforces that now.
+* **Inbound text can contain NUL bytes** (PDF extraction and older Windows
+  exports both produce them). PostgreSQL `text` cannot store one, and letting
+  it reach the insert aborts the whole transaction. `ingestion.storage.sanitise_text`
+  strips them and reports the count so the alteration is on the record.
+* **`tests/adversarial/` is a distinct suite.** Every test there reproduces a
+  defect that was real. `test_concurrency.py` needs genuinely parallel
+  sessions, so it commits and truncates rather than using the rollback
+  fixture. Before trusting a fix there, disable it and confirm the test
+  actually goes red.
 
 ## Running things
 

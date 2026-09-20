@@ -96,16 +96,23 @@ class Impact:
                 seen.append(order.customer_name)
         return seen
 
-    def revenue_exposure(self) -> tuple[Decimal | None, str, str | None]:
-        """Total value of the affected orders, and how complete that total is."""
+    def revenue_exposure(self) -> tuple[Decimal | None, str, str | None, str | None]:
+        """Total value of the affected orders, how complete it is, and in what.
+
+        The currency is returned alongside the figure rather than read off the
+        orders separately: the total is built only from the *priced* orders, so
+        taking the currency from the first affected order can label an INR
+        total as GBP whenever the unpriced order happens to sort first.
+        """
         if not self.affected_orders:
-            return None, UNAVAILABLE, "No customer orders are affected."
+            return None, UNAVAILABLE, "No customer orders are affected.", None
         priced = [o for o in self.affected_orders if o.outstanding_value is not None]
         if not priced:
             return (
                 None,
                 UNAVAILABLE,
                 "No unit prices are recorded on the affected order lines.",
+                None,
             )
         currencies = {o.currency for o in priced}
         if len(currencies) > 1:
@@ -114,6 +121,7 @@ class Impact:
                 UNAVAILABLE,
                 f"Affected orders span {', '.join(sorted(currencies))}; "
                 "TextileOps does not hold exchange rates, so no single total is shown.",
+                None,
             )
         total = sum((o.outstanding_value or ZERO for o in priced), ZERO)
         basis = CALCULATED if len(priced) == len(self.affected_orders) else PARTIAL
@@ -122,11 +130,10 @@ class Impact:
             if basis == CALCULATED
             else f"{len(self.affected_orders) - len(priced)} affected order(s) have no prices."
         )
-        return total, basis, note
+        return total, basis, note, next(iter(currencies))
 
     def to_dict(self) -> dict[str, Any]:
-        exposure, basis, note = self.revenue_exposure()
-        currency = self.affected_orders[0].currency if self.affected_orders else None
+        exposure, basis, note, currency = self.revenue_exposure()
         return {
             "headline": self.headline,
             "metrics": [m.to_dict() for m in self.metrics],

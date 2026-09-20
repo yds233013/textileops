@@ -18,14 +18,13 @@ from textileops.models.enums import (
     ProposalStatus,
     ReconciliationStatus,
     RiskLevel,
-    SalesOrderStatus,
     Severity,
 )
 from textileops.models.exceptions import OperationalException
 from textileops.models.intake import ReconciliationItem, SourceDocument
 from textileops.models.procurement import PurchaseOrder
-from textileops.models.sales import SalesOrder
 from textileops.services import clock
+from textileops.services import metrics as metrics_service
 from textileops.services import orders as order_service
 from textileops.services import production as production_service
 
@@ -53,6 +52,9 @@ class AttentionCard(BaseModel):
     customers_affected: list[str]
     revenue_exposure: str | None
     revenue_basis: str
+    #: Why there is no figure, when there is none. Without it the card can only
+    #: stay silent, and silence reads as "nothing is at stake".
+    revenue_note: str | None
     currency: str | None
     detected_at: dt.datetime
     age_hours: float
@@ -139,17 +141,8 @@ def dashboard(
     at_risk = [a for a in assessments if a.risk == RiskLevel.AT_RISK]
     late = [a for a in assessments if a.risk == RiskLevel.LATE]
 
-    delivered = session.scalars(
-        select(SalesOrder).where(
-            SalesOrder.status.in_([SalesOrderStatus.DELIVERED, SalesOrderStatus.CLOSED])
-        )
-    ).all()
-    on_time = [
-        order
-        for order in delivered
-        if order.closed_at is None or order.closed_at.date() <= order.promised_date
-    ]
-    on_time_pct = round(100 * len(on_time) / len(delivered)) if delivered else None
+    # Measured from confirmed arrivals, never from an internal closure stamp.
+    delivery = metrics_service.on_time_delivery(session)
 
     open_pos = list(
         session.scalars(
@@ -211,13 +204,27 @@ def dashboard(
         MetricTile(
             key="on_time_pct",
             label="On-time delivery",
-            value=on_time_pct,
-            unit="%",
-            tone="good" if (on_time_pct or 0) >= 90 else "warn",
+            value=delivery.percentage,
+            unit="%" if delivery.percentage is not None else None,
+            tone=(
+                "neutral"
+                if delivery.percentage is None
+                else "good"
+                if delivery.percentage >= 90
+                else "warn"
+            ),
             hint=(
-                f"Across {len(delivered)} completed order(s)."
-                if delivered
-                else "No completed orders yet — no rate can be shown."
+                (
+                    f"Across {delivery.measured} order(s) with a confirmed delivery date."
+                    + (
+                        f" {delivery.unmeasured} more are finished but not confirmed "
+                        "delivered, so they are not counted."
+                        if delivery.unmeasured
+                        else ""
+                    )
+                )
+                if delivery.measured
+                else "No order has a confirmed delivery date yet, so no rate can be shown."
             ),
         ),
         MetricTile(key="open_pos", label="Open purchase orders", value=len(open_pos)),
@@ -293,6 +300,7 @@ def _card(
         customers_affected=impact.get("customers_affected", []),
         revenue_exposure=financial.get("revenue_exposure"),
         revenue_basis=financial.get("basis", "unavailable"),
+        revenue_note=financial.get("note"),
         currency=financial.get("currency"),
         detected_at=exception.detected_at,
         age_hours=round(

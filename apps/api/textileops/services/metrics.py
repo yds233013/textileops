@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from textileops.models.enums import (
     ACTIVE_EXCEPTION_STATUSES,
     BusinessEventType,
+    SalesOrderStatus,
     Severity,
 )
 from textileops.models.exceptions import OperationalException
@@ -72,6 +73,78 @@ class MetricsSnapshot:
             "ai": self.ai,
             "caveat": self.caveat,
         }
+
+
+@dataclass
+class OnTimeDelivery:
+    """On-time performance, measured from confirmed deliveries only.
+
+    Orders whose goods have not been confirmed delivered are *unmeasured*, not
+    on time. Counting an internal closure timestamp — or worse, the absence of
+    one — as evidence of delivery produces a headline reliability number that
+    says 100% while a customer is still waiting.
+    """
+
+    measured: int
+    on_time: int
+    unmeasured: int
+
+    @property
+    def percentage(self) -> int | None:
+        if self.measured == 0:
+            return None
+        return round(100 * self.on_time / self.measured)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "measured": self.measured,
+            "on_time": self.on_time,
+            "unmeasured": self.unmeasured,
+            "percentage": self.percentage,
+        }
+
+
+def on_time_delivery(session: Session) -> OnTimeDelivery:
+    """Did the goods actually arrive by the date we promised?
+
+    An order counts as measured only when every shipment carrying it has a
+    confirmed ``actual_delivery_date``. It is on time when the last of those
+    arrivals is on or before the promised date.
+    """
+    from textileops.models.logistics import Shipment, ShipmentLine
+    from textileops.models.sales import SalesOrder
+
+    finished = session.scalars(
+        select(SalesOrder).where(
+            SalesOrder.status.in_(
+                [SalesOrderStatus.DELIVERED, SalesOrderStatus.CLOSED]
+            )
+        )
+    ).all()
+
+    measured = 0
+    on_time = 0
+    unmeasured = 0
+    for order in finished:
+        line_ids = [line.id for line in order.lines]
+        if not line_ids:
+            unmeasured += 1
+            continue
+        shipments_for_order = session.scalars(
+            select(Shipment)
+            .join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id)
+            .where(ShipmentLine.sales_order_line_id.in_(line_ids))
+            .distinct()
+        ).all()
+        arrivals = [s.actual_delivery_date for s in shipments_for_order]
+        if not arrivals or any(arrival is None for arrival in arrivals):
+            unmeasured += 1
+            continue
+        measured += 1
+        if max(arrival for arrival in arrivals if arrival) <= order.promised_date:
+            on_time += 1
+
+    return OnTimeDelivery(measured=measured, on_time=on_time, unmeasured=unmeasured)
 
 
 def _percentile(values: list[float], fraction: float) -> float | None:

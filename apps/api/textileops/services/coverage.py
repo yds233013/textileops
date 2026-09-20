@@ -55,6 +55,22 @@ class DemandAllocation:
         return self.shortfall_quantity > ZERO
 
     @property
+    def coverage_source(self) -> str:
+        """Where the covered portion actually comes from.
+
+        ``covered_by_date is None`` means two opposite things: the demand is
+        met entirely out of stock already in the building (stock has no arrival
+        date), or nothing covers it at all. Reading the date alone, a wholly
+        uncovered line looks exactly like a comfortably stocked one — so the
+        screen reported "from stock" for material we do not have.
+        """
+        if self.covered_quantity <= ZERO:
+            return "uncovered"
+        if self.covered_by_date is None:
+            return "stock"
+        return "incoming"
+
+    @property
     def is_late(self) -> bool:
         """Covered, but only by stock that lands after it is needed."""
         return (

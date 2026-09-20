@@ -72,15 +72,28 @@ def _cmd_drain(_args: argparse.Namespace) -> int:
 def _cmd_check(_args: argparse.Namespace) -> int:
     """Integrity checks that should always pass. Non-zero exit if they do not."""
     from textileops.services.inventory import ledger_discrepancies
+    from textileops.services.orders import delivery_claim_discrepancies
 
+    failed = False
     with session_scope() as session:
         discrepancies = ledger_discrepancies(session)
+        deliveries = delivery_claim_discrepancies(session)
+
     if discrepancies:
         print(json.dumps(discrepancies, indent=2, default=str))
         print(f"FAIL: {len(discrepancies)} lot(s) disagree with their movement ledger.")
-        return 1
-    print("OK: every inventory lot matches its movement ledger.")
-    return 0
+        failed = True
+    else:
+        print("OK: every inventory lot matches its movement ledger.")
+
+    if deliveries:
+        print(json.dumps(deliveries, indent=2, default=str))
+        print(f"FAIL: {len(deliveries)} order(s) claim a delivery no shipment confirms.")
+        failed = True
+    else:
+        print("OK: every delivered order has a shipment that confirms it.")
+
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

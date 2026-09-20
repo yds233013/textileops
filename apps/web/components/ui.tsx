@@ -196,20 +196,99 @@ export function RiskBadge({ risk }: { risk: string }) {
   );
 }
 
-const READINESS_TONE: Record<string, keyof typeof STATUS_CLASS> = {
+/**
+ * Colour is a claim. A grey pill reads as "nothing to see here", so any status
+ * missing from this map is silently reassuring — which is how a QC *reject*
+ * came to render in the same neutral grey as *not applicable*. Every status
+ * string the API can emit must appear here; `statusTone.test.ts` checks the
+ * list against the backend enums so a new status cannot be added upstream and
+ * quietly inherit the reassuring default.
+ */
+export const READINESS_TONE: Record<string, keyof typeof STATUS_CLASS> = {
+  // Material coverage
   ready: "ok",
   partial: "warn",
   short: "bad",
   not_applicable: "neutral",
+  materials_not_covered: "bad",
+  nothing_planned: "warn",
+
+  // Quality. "pass" and "reject" are the raw QCOutcome values; "passed" and
+  // "rejected" are the order-level roll-ups. Both reach this map.
+  pass: "ok",
   passed: "ok",
-  rejected: "bad",
+  conditional_pass: "warn",
   rework: "warn",
+  reject: "bad",
+  rejected: "bad",
   pending: "warn",
-  blocked: "bad",
+  not_inspected: "neutral",
+  partially_inspected: "warn",
+
+  // Production
+  planned: "neutral",
+  scheduled: "neutral",
+  not_started: "neutral",
   in_progress: "neutral",
+  blocked: "bad",
   completed: "ok",
-  delayed: "bad",
+  partially_cancelled: "warn",
+  cancelled: "neutral",
+
+  // Sales orders
+  draft: "neutral",
+  confirmed: "neutral",
+  in_production: "neutral",
+  ready_to_ship: "ok",
+  closed: "ok",
+
+  // Shipping
+  nothing_to_ship: "neutral",
+  not_shipped: "warn",
+  packed: "neutral",
+  dispatched: "neutral",
+  in_transit: "neutral",
+  partially_shipped: "warn",
+  shipped: "ok",
   delivered: "ok",
+  delayed: "bad",
+
+  // Purchase orders
+  sent: "neutral",
+  acknowledged: "neutral",
+  partially_received: "warn",
+  received: "ok",
+
+  // Stock lots. Quarantined cloth is real and countable but cannot be sold,
+  // so it is a warning, not a success.
+  available: "ok",
+  quarantine: "warn",
+  consumed: "neutral",
+
+  // Documents and ingestion
+  queued: "neutral",
+  processing: "neutral",
+  extracted: "ok",
+  needs_review: "warn",
+  applied: "ok",
+  failed: "bad",
+
+  // Exceptions. "dismissed" is a human judgement that the exception did not
+  // matter, not a success — green would claim the problem was fixed.
+  open: "warn",
+  investigating: "warn",
+  action_proposed: "warn",
+  resolved: "ok",
+  dismissed: "neutral",
+
+  // Proposals, approvals and executions
+  pending_approval: "warn",
+  approved: "ok",
+  executed: "ok",
+  awaiting_external: "warn",
+  expired: "neutral",
+  succeeded: "ok",
+  superseded: "neutral",
 };
 
 export function StatusPill({ value }: { value: string }) {

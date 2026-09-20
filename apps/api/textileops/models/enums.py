@@ -320,6 +320,16 @@ class EvidenceKind(StrEnum):
     AI_HYPOTHESIS = "ai_hypothesis"
 
 
+#: Evidence whose text did not originate inside our own system. A MESSAGE or a
+#: DOCUMENT is whatever a third party wrote, stored verbatim; an AI_HYPOTHESIS
+#: is model output that may itself be quoting one. None of it may be placed in
+#: a prompt as though it were our own record — it has to go behind the
+#: untrusted fence, or a supplier's email becomes an instruction to the model.
+UNTRUSTED_EVIDENCE_KINDS = frozenset(
+    {EvidenceKind.MESSAGE, EvidenceKind.DOCUMENT, EvidenceKind.AI_HYPOTHESIS}
+)
+
+
 class EntityType(StrEnum):
     SALES_ORDER = "sales_order"
     SALES_ORDER_LINE = "sales_order_line"

@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useState } from "react";
 import {
-  Badge,
   Card,
   EmptyState,
   ErrorState,
@@ -11,6 +10,7 @@ import {
   PageHeader,
   Select,
   SeverityBadge,
+  StatusPill,
   Table,
   Td,
 } from "@/components/ui";
@@ -149,28 +149,39 @@ export default function ExceptionsPage() {
                 <Td className="text-xs text-ink-600">{humanise(item.exception_type)}</Td>
                 <Td className="max-w-xs text-xs text-ink-600">
                   {item.impact?.headline}
-                  {item.impact?.financial.revenue_exposure && (
-                    <span className="mt-0.5 block font-medium text-ink-800">
-                      {money(
-                        item.impact.financial.revenue_exposure,
-                        item.impact.financial.currency,
-                      )}{" "}
-                      exposed
-                    </span>
-                  )}
+                  {/* Showing nothing when the figure cannot be computed makes
+                      an unknown exposure look like a zero one. */}
+                  {item.impact &&
+                    (item.impact.financial.revenue_exposure ? (
+                      <span className="mt-0.5 block font-medium text-ink-800">
+                        {money(
+                          item.impact.financial.revenue_exposure,
+                          item.impact.financial.currency,
+                        )}{" "}
+                        exposed
+                      </span>
+                    ) : (
+                      <span
+                        className="mt-0.5 block text-ink-500"
+                        title={item.impact.financial.note ?? undefined}
+                      >
+                        Exposure not available
+                      </span>
+                    ))}
                 </Td>
                 <Td>
-                  <Badge
-                    tone={
-                      item.status === "resolved"
-                        ? "ok"
-                        : item.status === "dismissed"
-                          ? "neutral"
-                          : "warn"
-                    }
-                  >
-                    {humanise(item.status)}
-                  </Badge>
+                  <StatusPill value={item.status} />
+                  {/* "Resolved" in the list looked identical whether a person
+                      fixed the problem or the engine merely stopped detecting
+                      the condition. Those warrant different follow-up. */}
+                  {item.auto_resolved && (
+                    <span
+                      className="mt-0.5 block text-xs text-ink-500"
+                      title="The engine stopped detecting the condition; nobody confirmed a fix."
+                    >
+                      auto-resolved
+                    </span>
+                  )}
                 </Td>
                 <Td className="whitespace-nowrap text-xs text-ink-500" title={dateTime(item.detected_at)}>
                   {relativeAge(

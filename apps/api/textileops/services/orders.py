@@ -100,6 +100,11 @@ class OrderAssessment:
     currency: str
     risk: RiskLevel
     estimated_completion: dt.date | None
+    #: Why there is no estimated completion, when there is none. ``None`` means
+    #: the order simply has nothing outstanding — it is finished, not stuck.
+    #: The three cases used to share one message, which asserted a cause the
+    #: system had not determined.
+    completion_unknown_reason: str | None
     days_ahead: int | None
     material_readiness: str
     production_status: str
@@ -185,6 +190,8 @@ def assess_order(
     blocked_reasons: list[str] = []
     batch_statuses: list[ProductionStatus] = []
     qc_outcomes: list[QCOutcome] = []
+    #: Batches that have produced something, so could have been inspected.
+    inspectable_batches = 0
 
     for line in sorted(order.lines, key=lambda line_: line_.line_no):
         outstanding = line.outstanding_quantity
@@ -200,6 +207,8 @@ def assess_order(
         batch_statuses.extend(b.status for b in batches)
 
         for batch in batches:
+            if batch.output_quantity > ZERO:
+                inspectable_batches += 1
             for inspection in session.scalars(
                 select(QCInspection).where(QCInspection.production_batch_id == batch.id)
             ).all():
@@ -251,6 +260,7 @@ def assess_order(
         )
 
     estimated_completion = _combine_ready_dates(lines)
+    completion_unknown_reason = _completion_unknown_reason(session, lines)
     risk = _risk_level(order, lines, estimated_completion, today)
     days_ahead = (
         (order.promised_date - estimated_completion).days if estimated_completion else None
@@ -269,16 +279,43 @@ def assess_order(
         currency=order.currency.value,
         risk=risk,
         estimated_completion=estimated_completion,
+        completion_unknown_reason=completion_unknown_reason,
         days_ahead=days_ahead,
         material_readiness=_material_readiness(session, lines),
         production_status=_production_status(batch_statuses),
-        qc_status=_qc_status(qc_outcomes),
+        qc_status=_qc_status(
+            qc_outcomes,
+            batches_with_output=inspectable_batches,
+            open_batches=sum(1 for s in batch_statuses if s in OPEN_BATCH_STATUSES),
+        ),
         shipment_status=_shipment_status(session, order),
         lines=lines,
         outstanding_value=outstanding_value,
         value_basis=value_basis,
         blocked_reasons=blocked_reasons,
     )
+
+
+def _completion_unknown_reason(
+    session: Session, lines: list[LineAssessment]
+) -> str | None:
+    """Explain a missing completion date, or return ``None`` if none is missing.
+
+    Three different conditions used to render as one sentence that asserted a
+    cause the system had never determined: an order with nothing left to do, an
+    order with no production planned, and an order whose batches cannot be
+    scheduled because their materials are not covered.
+    """
+    outstanding = [line for line in lines if line.outstanding_quantity > ZERO]
+    if not outstanding:
+        return None  # finished: there is no date to be missing
+    if all(line.estimated_ready_date is not None for line in outstanding):
+        return None
+
+    unknown = [line for line in outstanding if line.estimated_ready_date is None]
+    if any(line.batch_ids for line in unknown):
+        return "materials_not_covered"
+    return "nothing_planned"
 
 
 def _combine_ready_dates(lines: list[LineAssessment]) -> dt.date | None:
@@ -362,6 +399,13 @@ def _material_readiness(session: Session, lines: list[LineAssessment]) -> str:
 
 
 def _production_status(statuses: list[ProductionStatus]) -> str:
+    """Summarise a set of batch statuses for an operator.
+
+    "Completed" means cloth exists. A batch that was cancelled produced
+    nothing, so an order whose batches were all cancelled is *abandoned*, not
+    complete — reporting it green is the most dangerous kind of wrong, because
+    a green word stops the reader looking any further.
+    """
     if not statuses:
         return "not_started"
     if ProductionStatus.BLOCKED in statuses:
@@ -370,14 +414,31 @@ def _production_status(statuses: list[ProductionStatus]) -> str:
         return "rework"
     if ProductionStatus.IN_PROGRESS in statuses:
         return "in_progress"
-    if all(s in (ProductionStatus.COMPLETED, ProductionStatus.CANCELLED) for s in statuses):
+    live = [s for s in statuses if s != ProductionStatus.CANCELLED]
+    if not live:
+        return "cancelled"
+    if any(s == ProductionStatus.CANCELLED for s in statuses) and all(
+        s == ProductionStatus.COMPLETED for s in live
+    ):
+        return "partially_cancelled"
+    if all(s == ProductionStatus.COMPLETED for s in live):
         return "completed"
     if ProductionStatus.SCHEDULED in statuses:
         return "scheduled"
     return "planned"
 
 
-def _qc_status(outcomes: list[QCOutcome]) -> str:
+def _qc_status(
+    outcomes: list[QCOutcome], *, batches_with_output: int, open_batches: int
+) -> str:
+    """Summarise quality for an order.
+
+    "Passed" claims the whole order is quality-clear, so it is only honest when
+    every batch has run *and* every batch that produced something has been
+    inspected. One passed batch out of three — with two still to make, or made
+    and never looked at — is *partially inspected*. Calling that "Passed"
+    invites the reader to stop checking, which is the entire cost of the word.
+    """
     if not outcomes:
         return "not_inspected"
     if QCOutcome.REJECT in outcomes:
@@ -388,6 +449,8 @@ def _qc_status(outcomes: list[QCOutcome]) -> str:
         return "pending"
     if QCOutcome.CONDITIONAL_PASS in outcomes:
         return "conditional_pass"
+    if open_batches > 0 or batches_with_output > len(outcomes):
+        return "partially_inspected"
     return "passed"
 
 
@@ -545,3 +608,45 @@ def order_timeline(session: Session, order: SalesOrder) -> list[TimelineEvent]:
             )
 
     return sorted(events, key=lambda e: clock.ensure_utc(e.at))
+
+
+def delivery_claim_discrepancies(session: Session) -> list[dict[str, object]]:
+    """Orders claiming to be delivered that no shipment says arrived.
+
+    An order status is a claim about the physical world. "Delivered" asserts
+    that the cloth reached the customer, and the only evidence for that is a
+    shipment with a confirmed arrival date. When the two disagree the order
+    status wins every screen it appears on — and it fed the on-time percentage
+    a delivery that never happened.
+    """
+    problems: list[dict[str, object]] = []
+    delivered_orders = session.scalars(
+        select(SalesOrder).where(SalesOrder.status == SalesOrderStatus.DELIVERED)
+    ).all()
+
+    for order in delivered_orders:
+        carrying = session.scalars(
+            select(Shipment)
+            .join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id)
+            .join(SalesOrderLine, SalesOrderLine.id == ShipmentLine.sales_order_line_id)
+            .where(SalesOrderLine.sales_order_id == order.id)
+            .distinct()
+        ).all()
+        live = [s for s in carrying if s.status != ShipmentStatus.CANCELLED]
+        unarrived = [s for s in live if s.actual_delivery_date is None]
+        if not live:
+            problems.append(
+                {
+                    "sales_order": order.number,
+                    "problem": "marked delivered but no shipment carries it",
+                }
+            )
+        elif unarrived:
+            problems.append(
+                {
+                    "sales_order": order.number,
+                    "problem": "marked delivered while a shipment has no confirmed arrival",
+                    "shipments": [s.number for s in unarrived],
+                }
+            )
+    return problems

@@ -185,8 +185,23 @@ async def upload_document(
     if process_now:
         # Processed inline so the operator sees the result immediately; the same
         # code path runs in the worker.
-        pipeline.process_document(session, document)
-        session.commit()
+        try:
+            pipeline.process_document(session, document)
+            session.commit()
+        except Exception:
+            # The document row is committed already. Leaving now without a job
+            # would strand it: not processed, not queued, and invisible to both
+            # the worker and the operator, who only sees a 500. Hand it to the
+            # queue before letting the error out.
+            session.rollback()
+            enqueue(
+                session,
+                "process_document",
+                {"document_id": str(document.id)},
+                idempotency_key=f"process_document:{document.id}",
+            )
+            session.commit()
+            raise
         message = "Uploaded and processed."
     else:
         enqueue(
@@ -306,8 +321,21 @@ def ingest_message(
         received_at=payload.received_at,
     )
     session.commit()
-    outcome = pipeline.process_message(session, message)
-    session.commit()
+    try:
+        outcome = pipeline.process_message(session, message)
+        session.commit()
+    except Exception:
+        # Same shape as the upload path: the message is stored, so it must not
+        # be left unprocessed with nothing scheduled to look at it again.
+        session.rollback()
+        enqueue(
+            session,
+            "process_message",
+            {"message_id": str(message.id)},
+            idempotency_key=f"process_message:{message.id}",
+        )
+        session.commit()
+        raise
     return MessageIngestResponse(
         message=_message_out(message),
         facts_created=outcome.facts_created,

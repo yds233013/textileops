@@ -14,6 +14,7 @@ import {
   Loading,
   PageHeader,
   SeverityBadge,
+  StatusPill,
   Unavailable,
   inputClass,
 } from "@/components/ui";
@@ -241,6 +242,7 @@ export default function ExceptionDetailPage() {
   if (!data) return null;
 
   const latest = data.investigations[0];
+  const discarded = latest?.findings?.discarded_recommendations ?? [];
   const open = !["resolved", "dismissed"].includes(data.status);
 
   return (
@@ -275,9 +277,17 @@ export default function ExceptionDetailPage() {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <SeverityBadge severity={data.severity} />
         <Badge>{humanise(data.exception_type)}</Badge>
-        <Badge tone={open ? "warn" : "ok"}>{humanise(data.status)}</Badge>
+        {/* This rendered "Dismissed" in success green, because the only
+            question asked was whether the exception was still open. Somebody
+            deciding a problem did not matter is not the same as it being
+            fixed. StatusPill carries the deliberate tone for each status. */}
+        <StatusPill value={data.status} />
         <span className="font-mono text-xs text-ink-400">{data.code}</span>
-        {data.auto_resolved && <Badge tone="ok">Auto-resolved</Badge>}
+        {data.auto_resolved && (
+          <Badge tone="neutral" title="The engine stopped detecting the condition; nobody confirmed a fix.">
+            Auto-resolved
+          </Badge>
+        )}
         {data.occurrence_count > 1 && (
           <Badge tone="neutral">Seen {data.occurrence_count} times</Badge>
         )}
@@ -364,9 +374,20 @@ export default function ExceptionDetailPage() {
               <EmptyState
                 title="No proposals yet"
                 description={
-                  data.investigated_at
-                    ? "This one is a judgement call: the investigation lists the options rather than picking one. Raise a proposal when you have decided."
-                    : "Run an investigation, or raise a proposal yourself."
+                  !data.investigated_at
+                    ? "Run an investigation, or raise a proposal yourself."
+                    : discarded.length > 0
+                      ? // Saying "it lists the options rather than picking one"
+                        // was an invented reason: the investigation may well
+                        // have recommended something that the deterministic
+                        // gate then refused. Report what actually happened.
+                        `The investigation recommended ${discarded.length} action(s) that were refused before reaching you: ${discarded
+                          .map(
+                            (d) =>
+                              `${humanise(d.action_type)} — ${humanise(d.reason)}`,
+                          )
+                          .join("; ")}.`
+                      : "The investigation did not recommend an action. Review its options and raise a proposal when you have decided."
                 }
               />
             ) : (

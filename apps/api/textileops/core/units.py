@@ -29,6 +29,8 @@ QUANTITY_EXP = Decimal("0.001")
 MONEY_EXP = Decimal("0.01")
 
 
+
+
 class Dimension(str, Enum):
     MASS = "mass"
     LENGTH = "length"
@@ -201,13 +203,62 @@ def convert(value: Decimal, frm: UnitOfMeasure, to: UnitOfMeasure) -> Decimal:
     if frm == to:
         return quantize(value)
     if not units_compatible(frm, to):
+        # A roll and a piece are both counts, so naming the dimensions would
+        # produce "count and count are different concepts" — true but useless.
+        # What is actually wrong is that a roll holds a lot-specific number of
+        # pieces that nobody has told us.
+        if frm in _SELF_ONLY or to in _SELF_ONLY:
+            packaged = frm if frm in _SELF_ONLY else to
+            raise UnitMismatchError(
+                f"Cannot convert {frm.value} to {to.value}: how much is in one "
+                f"{packaged.value} is specific to the lot and is not recorded, "
+                "so there is no rate to convert by.",
+                details={"from": frm.value, "to": to.value},
+            )
         raise UnitMismatchError(
             f"Cannot convert {frm.value} to {to.value}: "
             f"{dimension_of(frm).value} and {dimension_of(to).value} are different concepts.",
             details={"from": frm.value, "to": to.value},
         )
     base = Decimal(str(value)) * _TO_BASE[frm]
-    return quantize(base / _TO_BASE[to])
+    exact = base / _TO_BASE[to]
+    converted = quantize(exact)
+
+    # Quantities are stored to three decimal places, which is generous in
+    # kilograms and hopeless in tonnes. Half a kilogram is 0.0005 t; rounded to
+    # the stored precision that becomes 0.001 t, and reading it back gives a
+    # whole kilogram. The stock did not change — the unit it was written in
+    # doubled it. One gram in tonnes rounds the other way and vanishes
+    # altogether. Neither is acceptable in a ledger, and neither announces
+    # itself, so refuse the conversion instead of storing the distorted figure.
+    # The test is not "is the error small" but "is any of it real". Rounding
+    # into the target unit loses ``exact - converted``; expressed in the source
+    # unit, that loss is only forgivable while it stays under the smallest
+    # amount the source unit can itself express. A pound into kilograms loses
+    # less than a thousandth of a pound, which the source could not have
+    # recorded anyway. 29.703 kg into tonnes loses 297 grams, which it plainly
+    # could — that is real yarn, and rounding it away in a ledger is not a
+    # precision question but a stock question.
+    lost_in_source = abs(exact - converted) * _TO_BASE[to] / _TO_BASE[frm]
+    # ``>=``, not ``>``. Losing exactly one whole step of the source unit is
+    # not a rounding artefact: a milligram expressed in kilograms loses
+    # precisely 0.001 g, which is the entire quantity.
+    if lost_in_source >= QUANTITY_EXP:
+        raise UnitMismatchError(
+            f"{value} {frm.value} cannot be recorded in {to.value} without "
+            f"losing {quantize(lost_in_source)} {frm.value}: TextileOps stores "
+            f"quantities to three decimal places, and {to.value} is too coarse "
+            f"a unit to hold this amount. Record it in {frm.value}.",
+            details={
+                "from": frm.value,
+                "to": to.value,
+                "value": str(value),
+                "exact": str(exact),
+                "storable": str(converted),
+                "lost": str(quantize(lost_in_source)),
+            },
+        )
+    return converted
 
 
 def add(a: Decimal, a_unit: UnitOfMeasure, b: Decimal, b_unit: UnitOfMeasure) -> Decimal:

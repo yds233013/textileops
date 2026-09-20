@@ -182,6 +182,12 @@ class ExtractedFact(Base, TimestampMixin):
         ),
         Index("ix_extracted_facts_status_type", "status", "fact_type"),
         Index("ix_extracted_facts_entity", "entity_type", "entity_id"),
+        # "What did we extract from this document?" runs on every ingested
+        # document and again per message. Both were sequential scans of the
+        # whole table: 12.7 ms to find 10 rows among 200,000, against 0.15 ms
+        # indexed. It only gets worse as the mill's correspondence accumulates.
+        Index("ix_extracted_facts_document", "source_document_id"),
+        Index("ix_extracted_facts_message", "message_id"),
     )
 
 

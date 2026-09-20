@@ -17,7 +17,13 @@ from textileops.core.logging import get_logger
 from textileops.ingestion import pipeline
 from textileops.models.exceptions import OperationalException
 from textileops.models.intake import Message, SourceDocument
-from textileops.services import actions, exception_engine, investigation, production
+from textileops.services import (
+    actions,
+    exception_engine,
+    investigation,
+    procurement,
+    production,
+)
 from textileops.workers.queue import enqueue, handler
 
 logger = get_logger(__name__)
@@ -58,8 +64,11 @@ def recompute_exceptions(session: Session, payload: dict[str, Any]) -> dict[str,
     """Refresh schedule estimates, then re-derive every exception."""
     production.refresh_all_estimates(session)
     actions.expire_stale_proposals(session)
+    # Supplier scores have to move on the passage of time, not only on
+    # delivery: a supplier who sends nothing is the commonest kind of late.
+    rates_changed = procurement.recompute_all_supplier_rates(session)
     result = exception_engine.run(session)
-    return result.summary()
+    return {**result.summary(), "supplier_rates_changed": rates_changed}
 
 
 @handler("investigate_exception")

@@ -37,7 +37,10 @@ class ActionProposal(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = pk_column()
     code: Mapped[str] = mapped_column(String(24), unique=True, nullable=False)
     exception_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("operational_exceptions.id", ondelete="CASCADE"), nullable=True
+        # RESTRICT: an exception cannot be deleted out from under a proposal
+        # that is carrying an approval, which is what made the whole chain
+        # reachable by a single cascading delete.
+        ForeignKey("operational_exceptions.id", ondelete="RESTRICT"), nullable=True
     )
     action_type: Mapped[ActionType] = mapped_column(
         enum_column(ActionType, "action_type"), nullable=False
@@ -89,7 +92,11 @@ class Approval(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = pk_column()
     action_proposal_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("action_proposals.id", ondelete="CASCADE"), nullable=False
+        # RESTRICT, not CASCADE. An approval is the record of a person taking
+        # responsibility for an action; deleting the proposal must not be able
+        # to erase who authorised it. One DELETE of a production batch used to
+        # cascade all the way down to here and take the approval with it.
+        ForeignKey("action_proposals.id", ondelete="RESTRICT"), nullable=False
     )
     decision: Mapped[ApprovalDecision] = mapped_column(
         enum_column(ApprovalDecision, "approval_decision"), nullable=False
@@ -106,6 +113,15 @@ class Approval(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_approvals_proposal", "action_proposal_id"),
+        # Two operators clicking Approve at the same moment produced two
+        # approval rows against one proposal, so "who authorised this?" had two
+        # answers. The service takes a row lock; this is the backstop that does
+        # not depend on the service being called correctly.
+        Index(
+            "uq_approvals_one_decision_per_proposal",
+            "action_proposal_id",
+            unique=True,
+        ),
     )
 
 
@@ -114,7 +130,9 @@ class Execution(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = pk_column()
     action_proposal_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("action_proposals.id", ondelete="CASCADE"), nullable=False
+        # RESTRICT for the same reason as Approval: the record that something
+        # actually ran is the last evidence that it did.
+        ForeignKey("action_proposals.id", ondelete="RESTRICT"), nullable=False
     )
     mode: Mapped[ExecutionMode] = mapped_column(
         enum_column(ExecutionMode, "execution_mode"), nullable=False

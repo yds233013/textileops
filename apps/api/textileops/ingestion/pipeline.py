@@ -159,7 +159,14 @@ def process_document(session: Session, document: SourceDocument) -> IngestionOut
         outcome.warnings.append(exc.message)
         return outcome
 
-    document.extracted_text = parsed.text
+    # Text pulled out of a PDF routinely contains NUL bytes, which PostgreSQL
+    # will not store; letting one reach the insert aborts the transaction.
+    document.extracted_text, stripped_nulls = storage.sanitise_text(parsed.text)
+    if stripped_nulls:
+        outcome.notes.append(
+            f"{stripped_nulls} NUL byte(s) were removed from the extracted text "
+            "so it could be stored. The original file is unchanged."
+        )
     document.page_count = parsed.page_count
     document.doc_metadata = {"warnings": parsed.warnings, "row_count": len(parsed.rows)}
     outcome.warnings.extend(parsed.warnings)
@@ -466,6 +473,8 @@ def receive_message(
     """Store an inbound message. Duplicate forwards are linked, never dropped."""
     if not body.strip():
         raise ValidationError("A message must have a body.")
+    body, stripped_nulls = storage.sanitise_text(body)
+    subject, _ = storage.sanitise_text(subject) if subject else (subject, 0)
     digest = storage.content_hash(body)
     duplicate = session.scalar(
         select(Message).where(Message.content_hash == digest).order_by(Message.received_at).limit(1)
@@ -494,7 +503,12 @@ def receive_message(
         entity_type=EntityType.MESSAGE,
         entity_id=message.id,
         summary=f"Message from {message.sender} via {channel.value}."
-        + (" Duplicate of an earlier message." if duplicate else ""),
+        + (" Duplicate of an earlier message." if duplicate else "")
+        + (
+            f" {stripped_nulls} NUL byte(s) removed so the text could be stored."
+            if stripped_nulls
+            else ""
+        ),
         actor_type="system",
     )
     return message

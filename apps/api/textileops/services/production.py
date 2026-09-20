@@ -492,6 +492,17 @@ def issue_materials(
                 requirement.issued_quantity
                 + convert(drawn, material.base_unit, requirement.unit)
             )
+            # The promise has been kept: draw the reservation down by what was
+            # actually taken. Leaving it standing would deduct the same
+            # kilograms twice — once as stock that left, once as stock still
+            # claimed — and tell the floor it has nothing when it has plenty.
+            inventory.consume_reservations(
+                session,
+                production_batch_id=batch.id,
+                material_id=requirement.material_id,
+                quantity=drawn,
+                unit=material.base_unit,
+            )
             issued[material.code] = drawn
         if remaining > ZERO:
             shortfalls[material.code] = remaining

@@ -71,6 +71,10 @@ export function AttentionCard({ card }: { card: Card }) {
           {card.impact_metrics.slice(0, 4).map((metric) => (
             <MetricChip key={metric.key} metric={metric} />
           ))}
+          {/* Omitting the figure when it cannot be computed makes an exception
+              of unknown cost look exactly like one that costs nothing, which
+              is the more comfortable of the two readings and the wrong one.
+              Say that it is unknown, and why. */}
           {card.revenue_exposure ? (
             <span className="inline-flex items-baseline gap-1 rounded bg-white px-1.5 py-0.5 text-xs text-ink-700 ring-1 ring-ink-200">
               Revenue exposure:{" "}
@@ -81,7 +85,14 @@ export function AttentionCard({ card }: { card: Card }) {
                 <span className="text-ink-500"> (partial)</span>
               )}
             </span>
-          ) : null}
+          ) : (
+            <span
+              className="inline-flex items-baseline gap-1 rounded bg-white px-1.5 py-0.5 text-xs text-ink-500 ring-1 ring-ink-200"
+              title={card.revenue_note ?? undefined}
+            >
+              Revenue exposure: <span className="font-medium">not available</span>
+            </span>
+          )}
         </div>
         {card.customers_affected.length > 0 && (
           <p className="mt-2 text-xs text-ink-600">

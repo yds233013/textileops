@@ -105,3 +105,27 @@ def content_hash(text: str) -> str:
     """Hash of normalised text — used to spot the same message forwarded twice."""
     normalised = " ".join(text.split()).lower()
     return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+
+
+#: PostgreSQL ``text`` cannot hold a NUL byte. Nothing else in the Unicode
+#: range is rejected, so this is the whole of what must be removed.
+_UNSTORABLE = "\x00"
+
+
+def sanitise_text(value: str) -> tuple[str, int]:
+    """Strip bytes PostgreSQL refuses to store, reporting how many went.
+
+    A NUL byte is ordinary in text extracted from a PDF and in exports from
+    older Windows systems. Passing one through to the insert raises
+    ``psycopg.DataError``, which aborts the whole transaction — so a single
+    malformed supplier email took down everything else in the same request,
+    returned a 500 rather than a refusal, and in the worker retried forever
+    against the identical payload until the job died.
+
+    The count is returned rather than discarded because invariant 11 says the
+    stored document is the evidence: if we had to alter it, that has to be on
+    the record instead of being done quietly.
+    """
+    if _UNSTORABLE not in value:
+        return value, 0
+    return value.replace(_UNSTORABLE, ""), value.count(_UNSTORABLE)

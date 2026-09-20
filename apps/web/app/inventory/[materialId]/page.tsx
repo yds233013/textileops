@@ -116,8 +116,10 @@ export default function MaterialCoveragePage() {
                           <span className="block text-critical-text">arrives too late</span>
                         )}
                       </>
-                    ) : (
+                    ) : allocation.coverage_source === "stock" ? (
                       "from stock"
+                    ) : (
+                      <span className="text-critical-text">nothing covers this</span>
                     )}
                   </Td>
                   <Td className="text-xs">

@@ -445,7 +445,10 @@ SALES_ORDERS = [
         [("FS-SJ180-WHT", D("3000"), UnitOfMeasure.METRE, D("129.00"))],
     ),
     (
-        "SO-0999", "CUST-005", 55, -12, SalesOrderStatus.DELIVERED, 5, "BC-9912",
+        # Dispatched but never confirmed as arrived. It was seeded DELIVERED,
+        # which contradicted its own shipment (SHP-2208 is still in transit)
+        # and handed the on-time metric a delivery that never happened.
+        "SO-0999", "CUST-005", 55, -12, SalesOrderStatus.SHIPPED, 5, "BC-9912",
         [("FS-RIB240-WHT", D("1200"), UnitOfMeasure.METRE, D("178.00"))],
     ),
 ]

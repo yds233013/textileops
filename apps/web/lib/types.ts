@@ -65,6 +65,7 @@ export interface AttentionCard {
   customers_affected: string[];
   revenue_exposure: string | null;
   revenue_basis: string;
+  revenue_note: string | null;
   currency: string | null;
   detected_at: string;
   age_hours: number;
@@ -309,6 +310,9 @@ export interface Allocation {
   covered_quantity: string;
   shortfall_quantity: string;
   covered_by_date: string | null;
+  /** Disambiguates a null covered_by_date, which means either
+   *  "already in the building" or "nothing covers this at all". */
+  coverage_source: "stock" | "incoming" | "uncovered";
   is_short: boolean;
   is_late: boolean;
   sales_order_id: string | null;
@@ -481,6 +485,13 @@ export interface InvestigationFindings {
   confidence: number;
   provider?: string;
   stubbed?: boolean;
+  /** Recommendations the deterministic gate refused, and why. Present only
+   *  when something was actually turned away. */
+  discarded_recommendations?: {
+    action_type: string;
+    title: string | null;
+    reason: string;
+  }[];
 }
 
 export interface Investigation {

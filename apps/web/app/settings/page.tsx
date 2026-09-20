@@ -38,8 +38,15 @@ export default function SettingsPage() {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium text-ink-900">{integration.name}</span>
+                {/* "Not configured" invites the reader to go and configure
+                    it. Three of these have no connector written at all, and
+                    the API distinguishes the two cases — so say which. */}
                 <Badge tone={integration.configured ? "ok" : "neutral"}>
-                  {integration.configured ? "Connected" : "Not configured"}
+                  {integration.status === "connected"
+                    ? "Connected"
+                    : integration.status === "not_implemented"
+                      ? "Not built"
+                      : "Not configured"}
                 </Badge>
               </div>
               <p className="mt-1 text-sm text-ink-600">{integration.detail}</p>

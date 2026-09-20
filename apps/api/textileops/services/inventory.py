@@ -29,11 +29,13 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from textileops.core.db import lock_row
 from textileops.core.errors import ConflictError, NotFoundError, ValidationError
 from textileops.core.units import UnitOfMeasure, convert, quantize
 from textileops.models.catalog import FabricSpec, Material
 from textileops.models.enums import (
     OPEN_PO_STATUSES,
+    OPEN_SALES_ORDER_STATUSES,
     EntityType,
     LotStatus,
     MovementType,
@@ -43,6 +45,7 @@ from textileops.models.enums import (
 from textileops.models.inventory import InventoryLot, InventoryMovement, InventoryReservation
 from textileops.models.procurement import PurchaseOrder, PurchaseOrderLine
 from textileops.models.production import ProductionBatch, ProductionMaterialRequirement
+from textileops.models.sales import SalesOrder, SalesOrderLine
 from textileops.services import clock
 
 ZERO = Decimal("0")
@@ -93,11 +96,10 @@ class MaterialPosition:
     available: Decimal
     incoming: Decimal
     required: Decimal
-    #: Reservations that are *not* mirrored by an open batch requirement (for
-    #: example stock set aside directly against a customer order). Coverage
-    #: subtracts only these, because batch reservations and batch requirements
-    #: are two records of the same demand — netting both would count it twice.
-    reserved_outside_open_batches: Decimal = ZERO
+    #: Active reservations held by batches that are finished, cancelled, or
+    #: belong to a closed order. Neither a real claim nor something to deduct
+    #: silently — surfaced so it can be cleaned up.
+    stale_reserved: Decimal = ZERO
     incoming_lines: list[IncomingLine] = field(default_factory=list)
     requirement_lines: list[RequirementLine] = field(default_factory=list)
 
@@ -114,18 +116,20 @@ class MaterialPosition:
 
     @property
     def over_committed_by(self) -> Decimal:
-        """How far reservations exceed the stock on the floor, if they do."""
+        """How far live reservations exceed the stock on the floor, if they do."""
         return max(ZERO, quantize(self.reserved - self.on_hand))
 
     @property
     def supply_for_coverage(self) -> Decimal:
-        """Stock the open batches can actually draw on.
+        """Stock the counted demand can actually draw on.
 
-        Clamped at zero: physical stock cannot be negative. Reservations that
-        exceed what is on the floor are a data problem, surfaced by the
-        inventory-anomaly detector rather than smuggled into a coverage figure.
+        This is simply what is physically on the floor. The reservations held
+        by that demand are *the same claim* as the requirements being allocated
+        against it, so deducting them here would count the demand twice. Stale
+        reservations are excluded by construction — they are not deducted at
+        all, they are reported.
         """
-        return max(ZERO, quantize(self.on_hand - self.reserved_outside_open_batches))
+        return max(ZERO, quantize(self.on_hand))
 
 
 # --- Lot & movement posting ---------------------------------------------------
@@ -217,6 +221,19 @@ def post_movement(
     quantity = Decimal(str(quantity))
     if quantity <= 0:
         raise ValidationError("Movement quantity must be a positive magnitude.")
+
+    # Take the row lock BEFORE reading the balance. Without it this function is
+    # a read-modify-write at READ COMMITTED: two sessions both read 100 kg,
+    # both pass the "can I issue 60?" check, and both store 40 — 120 kg issued
+    # out of a 100 kg lot, with the stored balance and the movement ledger
+    # permanently disagreeing. The per-row CHECK cannot catch it because each
+    # writer stores an absolute value that is itself non-negative.
+    #
+    # Locking first also settles idempotent replays: a second worker replaying
+    # the same key waits here, and by the time it reads the movement table the
+    # winner has committed, so it sees the existing row and no-ops instead of
+    # racing it to an IntegrityError.
+    lock_row(session, lot)
 
     if idempotency_key:
         existing = session.scalar(
@@ -327,6 +344,52 @@ def reserve(
     )
     session.add(reservation)
     return reservation
+
+
+def consume_reservations(
+    session: Session,
+    *,
+    production_batch_id: uuid.UUID,
+    material_id: uuid.UUID,
+    quantity: Decimal,
+    unit: UnitOfMeasure,
+) -> Decimal:
+    """Draw down a batch's reservation for one material by what was issued.
+
+    A reservation is a promise to consume; issuing is the consumption. Leaving
+    the promise standing after the stock has physically gone means the same
+    kilograms are deducted twice — once as stock that left, once as stock still
+    claimed — and the shop floor is told it has nothing when it has plenty.
+
+    Returns how much reservation was actually consumed, in ``unit``.
+    """
+    remaining = quantize(quantity)
+    consumed = ZERO
+    reservations = session.scalars(
+        select(InventoryReservation)
+        .where(
+            InventoryReservation.production_batch_id == production_batch_id,
+            InventoryReservation.material_id == material_id,
+            InventoryReservation.status == ReservationStatus.ACTIVE,
+        )
+        .order_by(InventoryReservation.created_at)
+    ).all()
+
+    for reservation in reservations:
+        if remaining <= ZERO:
+            break
+        held = convert(reservation.quantity, reservation.unit, unit)
+        take = min(held, remaining)
+        if take >= held:
+            reservation.status = ReservationStatus.CONSUMED
+            reservation.released_at = clock.now()
+        else:
+            reservation.quantity = quantize(
+                reservation.quantity - convert(take, unit, reservation.unit)
+            )
+        remaining = quantize(remaining - take)
+        consumed = quantize(consumed + take)
+    return consumed
 
 
 def release_reservations(
@@ -456,15 +519,25 @@ def requirement_lines(
         ProductionStatus.BLOCKED,
         ProductionStatus.REWORK,
     )
+    # A batch is only demand while the order behind it is still live. A
+    # cancelled or delivered order whose batch was never closed would otherwise
+    # hold its material for ever and invent shortages for the orders that are
+    # real. Batches with no order (stock builds) always count.
     stmt = (
         select(ProductionMaterialRequirement, ProductionBatch)
         .join(
             ProductionBatch,
             ProductionMaterialRequirement.production_batch_id == ProductionBatch.id,
         )
+        .outerjoin(
+            SalesOrderLine, ProductionBatch.sales_order_line_id == SalesOrderLine.id
+        )
+        .outerjoin(SalesOrder, SalesOrderLine.sales_order_id == SalesOrder.id)
         .where(
             ProductionMaterialRequirement.material_id == material.id,
             ProductionBatch.status.in_(open_statuses),
+            (ProductionBatch.sales_order_line_id.is_(None))
+            | (SalesOrder.status.in_(OPEN_SALES_ORDER_STATUSES)),
         )
     )
     out: list[RequirementLine] = []
@@ -488,6 +561,39 @@ def requirement_lines(
     return sorted(out, key=lambda line: line.required_by)
 
 
+OPEN_BATCH_STATUSES = (
+    ProductionStatus.PLANNED,
+    ProductionStatus.SCHEDULED,
+    ProductionStatus.IN_PROGRESS,
+    ProductionStatus.BLOCKED,
+    ProductionStatus.REWORK,
+)
+
+
+def legitimate_batch_ids(session: Session) -> set[uuid.UUID]:
+    """Batches whose claim on stock is still real.
+
+    A batch qualifies when it has not finished *and* the order behind it is
+    still live. This one definition drives demand, reservations and coverage
+    supply, so those three figures cannot disagree with each other — which is
+    how the same kilogram ends up both consumed and still promised.
+    """
+    return set(
+        session.scalars(
+            select(ProductionBatch.id)
+            .outerjoin(
+                SalesOrderLine, ProductionBatch.sales_order_line_id == SalesOrderLine.id
+            )
+            .outerjoin(SalesOrder, SalesOrderLine.sales_order_id == SalesOrder.id)
+            .where(
+                ProductionBatch.status.in_(OPEN_BATCH_STATUSES),
+                (ProductionBatch.sales_order_line_id.is_(None))
+                | (SalesOrder.status.in_(OPEN_SALES_ORDER_STATUSES)),
+            )
+        ).all()
+    )
+
+
 def material_position(
     session: Session, material_id: uuid.UUID, *, by_date: dt.date | None = None
 ) -> MaterialPosition:
@@ -502,16 +608,28 @@ def material_position(
     quarantined = _sum_lots(
         session, material=material, statuses=(LotStatus.QUARANTINE,), target_unit=unit
     )
-    reserved = _sum_reservations(session, material_id=material.id, target_unit=unit)
     incoming = incoming_lines(session, material, by_date=by_date)
     requirements = requirement_lines(session, material, by_date=by_date)
-    open_batch_ids = {line.production_batch_id for line in requirements}
-    reserved_outside = _sum_reservations(
-        session,
-        material_id=material.id,
-        target_unit=unit,
-        exclude_production_batch_ids=open_batch_ids,
-    )
+
+    # Reservations are partitioned rather than netted wholesale. A reservation
+    # held by a batch that is finished, or whose order was cancelled, is stale:
+    # it is neither a real claim on stock nor something to deduct quietly. It is
+    # reported so the inventory-anomaly detector can surface it.
+    legitimate = legitimate_batch_ids(session)
+    reserved = ZERO
+    stale_reserved = ZERO
+    for reservation in session.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.material_id == material.id,
+            InventoryReservation.status == ReservationStatus.ACTIVE,
+        )
+    ).all():
+        held = convert(reservation.quantity, reservation.unit, unit)
+        batch_id = reservation.production_batch_id
+        if batch_id is None or batch_id in legitimate:
+            reserved = quantize(reserved + held)
+        else:
+            stale_reserved = quantize(stale_reserved + held)
 
     return MaterialPosition(
         material_id=material.id,
@@ -522,7 +640,7 @@ def material_position(
         quarantined=quarantined,
         reserved=reserved,
         available=quantize(on_hand - reserved),
-        reserved_outside_open_batches=reserved_outside,
+        stale_reserved=stale_reserved,
         incoming=quantize(sum((line.quantity for line in incoming), ZERO)),
         required=quantize(sum((line.quantity for line in requirements), ZERO)),
         incoming_lines=incoming,
