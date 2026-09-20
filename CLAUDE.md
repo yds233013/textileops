@@ -209,9 +209,30 @@ cd apps/api
 .venv/bin/python -m textileops.cli seed --reset
 .venv/bin/python -m textileops.cli recompute
 .venv/bin/python -m textileops.cli simulate supplier_delay
-.venv/bin/python -m textileops.cli check          # data integrity
-.venv/bin/python -m textileops.evals.runner       # AI evaluations
+.venv/bin/python -m textileops.cli check          # integrity, read-only, --json for CI
+.venv/bin/python -m textileops.evals.runner       # AI evaluations (offline)
+
+# Benchmarking. Never against the demo database — point DATABASE_URL at a
+# throwaway one first; the generator writes thousands of fictional customers
+# and refuses to run when ENVIRONMENT=production.
+.venv/bin/python -m textileops.cli scale-data --multiplier 2
+PYTHONPATH=. .venv/bin/python scripts/benchmark.py
+
+# Live model evaluation. Refuses to start without ANTHROPIC_API_KEY rather
+# than quietly falling back to the stub and producing a report that looks
+# like a live run.
+ANTHROPIC_API_KEY=... .venv/bin/python -m textileops.evals.live --budget-usd 1.00
 ```
+
+## Pilot mode
+
+`PILOT_MODE=true` (no prefix — `Settings` reads the bare names) stops
+TextileOps changing anything by itself. It still ingests, reconciles,
+calculates, detects, investigates and proposes; what it will not do is let a
+supplier's email move a delivery date on its own — that becomes a
+reconciliation item — or execute an action with no named human approval behind
+it. Enforced in the services, because a mode you can step around with curl is
+a label.
 
 ## Working without an API key
 

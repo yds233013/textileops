@@ -65,8 +65,20 @@ read-only by construction, not by permission check.
 * Structured logging redacts known-sensitive keys (`api_key`, `authorization`,
   `password`, `token`, `secret`, …) from every event before rendering.
 * `ai_call_logs` records metadata, never prompts or untrusted content.
-* `JWT_SECRET` defaults to an obviously-insecure development value; generate a
-  real one before deploying (`docs/DEPLOYMENT.md`).
+* `JWT_SECRET` defaults to an obviously-insecure development value, and
+  **the application refuses to start with it when `ENVIRONMENT=production`**.
+  This used to be advice in this document, which is to say a request that
+  somebody remember: anyone who has read the repository can mint an `owner`
+  token with the default. `Settings.assert_safe_for_production` also refuses
+  to start with `DEBUG` on or a wildcard CORS origin, and `/docs` and
+  `/openapi.json` are not served in production.
+* An execution's stored error is not returned to clients verbatim. A database
+  failure carries the statement, the constraint name and the bound parameters;
+  callers get the kind of failure, and the detail stays in the execution
+  record and the audit trail.
+* A person cannot approve a proposal they raised themselves, unless they are
+  an owner. Rule-engine and investigation proposals have no author, so the
+  rule does not apply to them.
 
 ## Data integrity
 

@@ -74,6 +74,27 @@ Then open <http://localhost:3000> and sign in:
 
 The password comes from `DEMO_PASSWORD`; seeding refuses to run in production.
 
+### Before real data
+
+Set `PILOT_MODE=true`. TextileOps then ingests, reconciles, calculates,
+detects exceptions, investigates and proposes — but changes nothing by
+itself: a supplier's email saying a delivery has slipped becomes something an
+operator confirms rather than a date that quietly moves, and no action runs
+without a named human approval behind it. The banner says so on every page,
+and the enforcement is in the services, not the interface.
+
+`docs/PILOT_DATA_REQUIREMENTS.md` says what to collect and in what shape;
+`data/templates/` has a CSV per dataset. Read the first two sections of that
+document before gathering anything — units and consumption decide whether
+everything downstream means anything.
+
+Then:
+
+```bash
+cd apps/api
+.venv/bin/python -m textileops.cli check     # read-only; safe against a live database
+```
+
 ### Without Docker
 
 Point `DATABASE_URL` at any PostgreSQL 14+ instance and run the same steps from

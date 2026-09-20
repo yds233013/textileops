@@ -152,3 +152,33 @@ the yarn lands on the 29th, a batch needing it cannot start on the 21st — and
 if the material is not covered at all, the batch has **no** estimated
 completion, which propagates to the order as `AT_RISK` rather than a
 comfortable-looking guess.
+
+
+## Correcting a goods receipt
+
+A posted receipt is a statement about what physically arrived. When it turns
+out to be wrong it does not stop having been made, so nothing edits or deletes
+one: a correction is a separate immutable row against the original, and the
+stock it removes leaves through the ledger as a `RECEIPT_CORRECTION` movement.
+
+Corrections only ever **reduce**. If 1,000 kg was keyed and 900 arrived, that
+is a correction of −100. If 900 was keyed and 1,000 arrived, the extra 100 kg
+physically turned up and is recorded as another receipt. A correction can
+therefore never conjure stock, which removes a whole class of abuse.
+
+A correction is **refused when the stock is no longer there to remove**. If
+1,000 kg was received and 950 already consumed, correcting to 900 would mean
+50 kg of the recorded *consumption* did not happen either, and only a person
+can say which record is wrong. The refusal names the lot, its on-hand figure
+and the shortfall.
+
+Correcting a lot down below its own reservations *is* allowed. The stock
+genuinely is not there, so the reservation was always a promise that could not
+be kept; coverage and the exception engine then report the shortage, which is
+the honest outcome. Refusing would hide it.
+
+Reversing a receipt in full also walks the purchase order's status back —
+`RECEIVED` and `PARTIALLY_RECEIVED` are conclusions drawn from the receipts, so
+they are the two statuses that may be withdrawn when the receipts go away.
+`DRAFT` and `SENT` are things a person did and are never invented, so a full
+reversal returns the order to `ACKNOWLEDGED`.

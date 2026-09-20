@@ -785,3 +785,22 @@ miss. All five were real.
   is fixed above; the tests are noted under remaining risks as still going
   round the service.
 
+## Phase 25 — Documentation checked against the code
+
+Every command in `README.md`, `CLAUDE.md` and `docs/` was run. All of them
+exist and work. Three real gaps, now closed:
+
+- **`SECURITY.md` described the JWT secret as advice** — "generate a real one
+  before deploying" — which is a document asking a person to remember
+  something. It is now enforced at startup, and the document says so.
+- **Goods receipt corrections were documented nowhere**, despite being a
+  domain concept with its own rules about what may and may not be corrected.
+  Added to `DOMAIN.md`.
+- **Pilot mode was documented nowhere**, which for the feature whose entire
+  purpose is first contact with real data is the wrong place for it to be
+  missing. Added to `README.md` (what to do before real data) and `CLAUDE.md`.
+
+Also added: `scale-data` and the benchmark harness, with the warning to point
+`DATABASE_URL` somewhere throwaway first — I sent 31,000 fictional rows into
+the demo database by assuming an env prefix that does not exist.
+
