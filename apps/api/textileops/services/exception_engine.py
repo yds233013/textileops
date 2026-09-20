@@ -568,10 +568,15 @@ def detect_po_issues(session: Session) -> list[Detection]:
                 exception_type=ExceptionType.SUPPLIER_DELAY,
                 severity=severity,
                 title=f"{po.supplier.name} delayed {po.number} by {delay_days} day(s)",
+                # Deliberately no quoted reason. This summary is rendered into
+                # the investigator's brief under "what the deterministic engine
+                # found" — outside the untrusted fence — so a supplier's prose
+                # here arrives dressed as our own conclusion, forged delimiters
+                # and all. The words themselves are kept, as fenced evidence.
                 summary=(
                     f"Original date {po.expected_date.isoformat()}, now "
                     f"{po.revised_expected_date.isoformat()}."
-                    + (f" Reason given: {po.eta_note}" if po.eta_note else "")
+                    + (" A reason was given; see the evidence." if po.eta_note else "")
                 ),
                 entity_type=EntityType.PURCHASE_ORDER,
                 entity_id=po.id,
@@ -680,6 +685,20 @@ def _po_evidence(session: Session, po: PurchaseOrder, *, days_late: int) -> list
             entity_id=po.id,
         )
     ]
+    if po.eta_note:
+        # MESSAGE, not RECORD: these are the supplier's words, not ours.
+        # The kind is what puts it behind the fence when the investigator's
+        # brief is built, so getting it wrong here would put quoted prose back
+        # into the trusted half by another route.
+        items.append(
+            EvidenceItem(
+                kind=EvidenceKind.MESSAGE,
+                label="Reason given by the supplier",
+                detail=po.eta_note,
+                entity_type=EntityType.PURCHASE_ORDER,
+                entity_id=po.id,
+            )
+        )
     for line in po.lines:
         items.append(
             EvidenceItem(

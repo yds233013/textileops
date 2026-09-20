@@ -497,7 +497,11 @@ def issue_materials(
                 InventoryLot.status == LotStatus.AVAILABLE,
                 InventoryLot.quantity_on_hand > 0,
             )
-            .order_by(InventoryLot.received_at)
+            # received_at alone is not a total order: one delivery can produce
+        # several lots on the same day, and two batches drawing the same
+        # material would then take the lot locks in whatever order the scan
+        # returned. id breaks the tie identically in every transaction.
+        .order_by(InventoryLot.received_at, InventoryLot.id)
         ).all()
 
         for lot in lots:
@@ -552,6 +556,15 @@ def complete_batch(
     user_id: uuid.UUID | None = None,
 ) -> ProductionBatch:
     completed_at = at or clock.now()
+    # Lock the batch. `record_output` was given this in Phase 4; completion
+    # reads the same `output_quantity` — through `_propagate_produced_quantity`
+    # — and writes the order line's credit from it. A shift keying in its
+    # output while the completion form is open therefore lost that output:
+    # the batch ends COMPLETED holding 1,200 m while the order is credited
+    # with 1,000, and nothing ever recomputes it, because completion is the
+    # only caller and a completed batch cannot be completed again.
+    lock_row(session, batch)
+
     # Consume before releasing: what the batch burned must leave the shelf.
     consumption = issue_materials(session, batch, at=completed_at)
     _transition(batch, ProductionStatus.COMPLETED)

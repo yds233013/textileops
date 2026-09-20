@@ -492,6 +492,12 @@ def receive_message(
         thread_ref=thread_ref,
         content_hash=digest,
         supplier_id=supplier_id,
+        # A caller passing supplier_id is a signed-in operator saying so, or
+        # our own ingestion attaching a known mailbox. Both are decisions made
+        # outside the message.
+        supplier_attribution=(
+            SUPPLIER_ATTRIBUTION_CALLER if supplier_id is not None else None
+        ),
         customer_id=customer_id,
         source_document_id=source_document_id,
         duplicate_of_id=duplicate.id if duplicate else None,
@@ -579,6 +585,10 @@ def process_message(session: Session, message: Message) -> IngestionOutcome:
         supplier_match = resolution.resolve_supplier(session, claim.supplier_name_text)
         if supplier_match.resolved:
             message.supplier_id = supplier_match.entity.id  # type: ignore[union-attr]
+            # Marked as body-derived. This link is for display and for finding
+            # the message later; it confers no authority, because the name it
+            # came from was written by whoever sent the message.
+            message.supplier_attribution = SUPPLIER_ATTRIBUTION_EXTRACTED
         elif supplier_match.needs_review:
             _open_reconciliation(
                 session,
@@ -792,18 +802,74 @@ def _apply_message_claim(
     fact.entity_type = EntityType.PURCHASE_ORDER
     fact.entity_id = po.id
     fact.applied_at = clock.now()
-    message.supplier_id = message.supplier_id or po.supplier_id
+    # The check above passed on the sender's address, so the link is now
+    # evidenced by something the sender did not choose.
+    if message.supplier_id is None:
+        message.supplier_id = po.supplier_id
+    message.supplier_attribution = SUPPLIER_ATTRIBUTION_SENDER
     outcome.notes.append(
         f"{po.number} now expected {new_date.isoformat()} on the strength of this message."
     )
     return True
 
 
+#: Mail domains shared by the public. A supplier whose contact address is a
+#: gmail account is completely normal in this trade — but it means "same
+#: domain" says only that both parties use gmail, which is no evidence at all.
+PUBLIC_MAIL_DOMAINS = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "yahoo.com",
+        "yahoo.co.in",
+        "yahoo.co.uk",
+        "hotmail.com",
+        "outlook.com",
+        "live.com",
+        "rediffmail.com",
+        "aol.com",
+        "icloud.com",
+        "protonmail.com",
+        "proton.me",
+        "zoho.com",
+        "mail.com",
+        "gmx.com",
+        "yandex.com",
+    }
+)
+
+SUPPLIER_ATTRIBUTION_CALLER = "caller"
+SUPPLIER_ATTRIBUTION_SENDER = "sender_address"
+SUPPLIER_ATTRIBUTION_EXTRACTED = "extracted_text"
+
+#: Attributions that may authorise a change. A signed-in operator saying which
+#: supplier a message is from, or the transport telling us the address it came
+#: from. Never a name lifted out of the body.
+AUTHORITATIVE_ATTRIBUTIONS = frozenset(
+    {SUPPLIER_ATTRIBUTION_CALLER, SUPPLIER_ATTRIBUTION_SENDER}
+)
+
+
 def _sender_speaks_for_supplier(
     session: Session, message: Message, po: PurchaseOrder
 ) -> bool:
-    """Is this message actually from the supplier whose order it names?"""
-    if message.supplier_id is not None:
+    """Is this message actually from the supplier whose order it names?
+
+    Invariant 7 lives here. The authorising fact has to be something the
+    sender could not simply write down, which means the address the message
+    arrived from or a person deciding — never the sign-off in the body.
+
+    This used to short-circuit on ``message.supplier_id`` alone. That field is
+    set a few lines after extraction from ``claim.supplier_name_text``: the
+    supplier name the model read *out of the untrusted body*. So signing an
+    email "Regards, Sri Balaji Spinning" was enough to be treated as Sri
+    Balaji Spinning, and any sender who could guess a PO number — they are not
+    secret — could move its delivery date.
+    """
+    if (
+        message.supplier_id is not None
+        and message.supplier_attribution in AUTHORITATIVE_ATTRIBUTIONS
+    ):
         return message.supplier_id == po.supplier_id
 
     sender = (message.sender or "").strip().lower()
@@ -812,10 +878,13 @@ def _sender_speaks_for_supplier(
     contact = (po.supplier.contact_email or "").strip().lower()
     if contact and sender == contact:
         return True
-    # Same mail domain as the supplier's recorded contact is good enough to act
-    # on; anything else is a question for a person.
+    # A shared mail domain is only evidence when the domain belongs to the
+    # supplier. Two gmail addresses have nothing in common.
     if contact and "@" in contact and "@" in sender:
-        return sender.rsplit("@", 1)[1] == contact.rsplit("@", 1)[1]
+        contact_domain = contact.rsplit("@", 1)[1]
+        if contact_domain in PUBLIC_MAIL_DOMAINS:
+            return False
+        return sender.rsplit("@", 1)[1] == contact_domain
     return False
 
 

@@ -131,6 +131,14 @@ def receive(
     if accepted + rejected <= ZERO:
         raise ValidationError("A receipt must record some quantity.")
 
+    # Parent first, then the line, then the lot — the same order everywhere
+    # that touches them. `_refresh_po_status` reads *every* line of the order,
+    # so locking only the line being written let two concurrent receipts on
+    # different lines each see the other as stale: both wrote
+    # PARTIALLY_RECEIVED, and a fully received order stayed "partially" for
+    # ever, keeping it in the open-purchase-order list with no way back.
+    lock_row(session, line.purchase_order)
+
     # Serialise receipts against this line. ``received_quantity`` is
     # accumulated read-modify-write and ``_next_lot_code`` is a count(*) + 1,
     # so two deliveries keyed in at the same moment either both compute the
@@ -491,6 +499,7 @@ def correct_receipt(
             )
 
     line = receipt.purchase_order_line
+    lock_row(session, line.purchase_order)
     lock_row(session, line)
     session.refresh(receipt)
 

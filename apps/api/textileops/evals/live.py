@@ -157,16 +157,35 @@ def run(
             "`python -m textileops.evals.runner` for the offline suite."
         )
 
-    os.environ["AI_PROVIDER"] = "anthropic"
-    os.environ.setdefault("AI_TIMEOUT_SECONDS", str(timeout_seconds))
-
-    # Reload settings so the environment above is picked up even if something
-    # imported them earlier in the process.
     import textileops.core.config as config_module
     from textileops.core.config import Settings
 
+    # Point the process at the real provider for the run, and put everything
+    # back afterwards. Anything may import this module, so leaving
+    # AI_PROVIDER=anthropic and a replaced settings object behind changes the
+    # behaviour of whatever runs next — which is exactly what happened: an
+    # unrelated dashboard test started reporting a live AI mode.
+    previous_env = {
+        key: os.environ.get(key) for key in ("AI_PROVIDER", "AI_TIMEOUT_SECONDS")
+    }
+    previous_settings = config_module.settings
+    os.environ["AI_PROVIDER"] = "anthropic"
+    os.environ.setdefault("AI_TIMEOUT_SECONDS", str(timeout_seconds))
     config_module.settings = Settings()
+    try:
+        return _run_cases(budget_usd=budget_usd, limit=limit, max_turns=max_turns)
+    finally:
+        config_module.settings = previous_settings
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
+
+def _run_cases(
+    *, budget_usd: float, limit: int | None, max_turns: int
+) -> dict[str, Any]:
     from textileops.ai.provider import get_provider
 
     tool_names = _assert_no_write_tools()
@@ -272,7 +291,7 @@ def run(
         "model": next((r.model for r in results if r.model), None),
         "limits": {
             "budget_usd": budget_usd,
-            "timeout_seconds": timeout_seconds,
+            "timeout_seconds": float(os.environ.get("AI_TIMEOUT_SECONDS", 0) or 0),
             "max_turns": max_turns,
         },
         "investigation_tools": tool_names,

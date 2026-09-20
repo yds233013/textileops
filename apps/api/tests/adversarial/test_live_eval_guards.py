@@ -170,3 +170,34 @@ def test_the_report_distinguishes_a_trap_from_an_ordinary_failure():
     assert "| yarn_count_as_mass | TRAP |" in markdown
     assert "| missing_optional | fail |" in markdown
     assert "a trap is a specific wrong answer, not a missing field" in markdown
+
+
+def test_the_harness_leaves_global_configuration_as_it_found_it(monkeypatch):
+    """It has to point the process at the real provider, and then put it back.
+
+    Anything may import this module. Leaving ``AI_PROVIDER=anthropic`` and a
+    replaced settings object behind changes what runs next — and it did: an
+    unrelated dashboard test began reporting a live AI mode, and the failure
+    showed up in whichever test happened to follow, never in the one that
+    caused it.
+    """
+    import textileops.core.config as config_module
+
+    before_settings = config_module.settings
+    before_provider = os.environ.get("AI_PROVIDER")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
+
+    class _Stub:
+        name = "stub"
+
+    monkeypatch.setattr("textileops.ai.provider.get_provider", lambda: _Stub())
+    with pytest.raises(SystemExit):
+        live.run()
+
+    assert config_module.settings is before_settings, (
+        "the harness replaced the global settings object and did not restore it"
+    )
+    assert os.environ.get("AI_PROVIDER") == before_provider, (
+        "the harness left AI_PROVIDER pointing at the live model"
+    )

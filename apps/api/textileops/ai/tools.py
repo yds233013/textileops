@@ -225,7 +225,14 @@ def build_investigation_tools(context: ToolContext) -> list[ToolSpec]:
                 "revised_expected_date": (
                     po.revised_expected_date.isoformat() if po.revised_expected_date else None
                 ),
-                "eta_note": po.eta_note,
+                # The supplier's own words, quoted. Fenced like any other third-party
+            # text: message bodies and document excerpts in this same file
+            # already are, and this reaches the model by exactly the same route.
+            "eta_note_untrusted": (
+                wrap_untrusted(po.eta_note, label="reason given by the supplier")
+                if po.eta_note
+                else None
+            ),
                 "ordered_quantity": str(line.ordered_quantity),
                 "received_quantity": str(line.received_quantity),
                 "outstanding_quantity": str(line.outstanding_quantity),
@@ -249,7 +256,14 @@ def build_investigation_tools(context: ToolContext) -> list[ToolSpec]:
             "revised_expected_date": (
                 po.revised_expected_date.isoformat() if po.revised_expected_date else None
             ),
-            "eta_note": po.eta_note,
+            # The supplier's own words, quoted. Fenced like any other third-party
+            # text: message bodies and document excerpts in this same file
+            # already are, and this reaches the model by exactly the same route.
+            "eta_note_untrusted": (
+                wrap_untrusted(po.eta_note, label="reason given by the supplier")
+                if po.eta_note
+                else None
+            ),
             "eta_updated_at": po.eta_updated_at.isoformat() if po.eta_updated_at else None,
             "eta_source_message_id": (
                 str(po.eta_source_message_id) if po.eta_source_message_id else None

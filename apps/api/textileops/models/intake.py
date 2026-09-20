@@ -112,6 +112,14 @@ class Message(Base, TimestampMixin):
     supplier_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
     )
+    #: *How* this message came to be linked to that supplier. The distinction
+    #: is the whole of invariant 7 on this path: "caller" is a signed-in
+    #: operator saying so and "sender_address" is transport metadata, but
+    #: "extracted_text" is a name the model copied out of the message body —
+    #: which is to say, out of whatever the sender chose to write. A link made
+    #: that way is fine for showing the message next to a supplier and must
+    #: never authorise a change to that supplier's orders.
+    supplier_attribution: Mapped[str | None] = mapped_column(String(32), nullable=True)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
     )

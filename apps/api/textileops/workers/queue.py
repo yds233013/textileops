@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from textileops.core.config import settings
@@ -86,6 +87,21 @@ def enqueue(
         idempotency_key=idempotency_key,
     )
     session.add(job)
+    if idempotency_key:
+        # The check above is a read followed by a write, so two enqueuers can
+        # both find nothing and both insert. Losing that race must not cost the
+        # caller their transaction: this runs inside the ingestion handler, and
+        # an IntegrityError here used to roll back a whole document extraction
+        # and record the failure against the *document*, blaming a key
+        # collision that had nothing to do with it.
+        savepoint = session.begin_nested()
+        try:
+            session.flush()
+            savepoint.commit()
+        except IntegrityError:
+            savepoint.rollback()
+            return None
+        return job
     session.flush()
     return job
 
@@ -225,10 +241,9 @@ def queue_depth(session: Session, *, queue: str = "default") -> dict[str, int]:
     return depth
 
 
-#: How long a pending recompute absorbs further requests for one. Long enough
-#: that a burst of ingested messages produces one sweep, short enough that an
-#: operator watching the exception list does not wait noticeably longer.
-DEBOUNCE_SECONDS = 60
+#: Statuses in which a sweep has not yet finished looking at the world. Only
+#: these may absorb a further request for one.
+PENDING_JOB_STATUSES = (JobStatus.QUEUED, JobStatus.RUNNING)
 
 
 def enqueue_debounced(
@@ -237,28 +252,36 @@ def enqueue_debounced(
     payload: dict[str, Any] | None = None,
     *,
     queue: str = "default",
-    window_seconds: int = DEBOUNCE_SECONDS,
 ) -> Job | None:
-    """Enqueue a whole-database sweep at most once per window.
+    """Keep at most one *pending* whole-database sweep.
 
-    A full exception recompute re-derives everything, so running it twice in a
-    row produces the same answer the second time. It was enqueued once per
-    ingested document and once per message with no key, which on a busy
-    morning means a queue of identical minutes-long sweeps that can never
-    drain faster than the mail arrives.
+    A full exception recompute re-derives everything, so a second one queued
+    behind the first would compute the same answer. It was enqueued once per
+    ingested document and once per message with no key at all, which on a busy
+    morning queues identical multi-minute sweeps faster than they drain.
 
-    The window is part of the key, so requests inside it collapse onto the
-    pending job and the one already queued still runs — a change is delayed by
-    at most the window, never dropped.
+    The earlier version of this keyed the job by a one-minute window, which
+    was wrong in a way that mattered: ``enqueue`` treats *any* existing key as
+    absorbing, SUCCEEDED included. So once that window's sweep had run, every
+    further request inside the window was silently dropped — and since nothing
+    schedules a sweep periodically, dropped meant lost, not delayed. A 40-day
+    supplier delay could be applied to a purchase order and the high-severity
+    exception it raises simply never appear.
+
+    Collapsing onto a job that is still QUEUED or RUNNING is safe, because
+    that job has not looked at the world yet and will see this change too. A
+    job that has already finished has not, so it must not absorb anything.
     """
-    from textileops.services import clock
-
-    now = clock.now()
-    bucket = int(now.timestamp() // window_seconds)
-    return enqueue(
-        session,
-        task,
-        payload,
-        queue=queue,
-        idempotency_key=f"{task}:window:{bucket}",
+    pending = session.scalar(
+        select(Job).where(
+            Job.task == task,
+            Job.queue == queue,
+            Job.status.in_(PENDING_JOB_STATUSES),
+        )
     )
+    if pending is not None:
+        return None
+    # No idempotency key: what bounds this is the pending check above, and a
+    # key would reintroduce exactly the "already succeeded, therefore skip"
+    # behaviour this exists to avoid.
+    return enqueue(session, task, payload, queue=queue)

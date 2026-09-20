@@ -487,3 +487,135 @@ matching nothing looks identical to a guard passing.
 **Not run.** There is no API key in this environment, so no live result is
 claimed. See the handoff.
 
+## Phases 26 + 27 — Clean room, and four independent reviewers
+
+### CR-1 — every route that queues background work returned a 500 (critical)
+
+*Found by:* starting the stack for real against an empty database and driving
+an operator workflow over HTTP. Not findable any other way.
+
+The API process never imported `textileops.workers.tasks`, so no handlers were
+registered and `enqueue` raised `No handler registered for task …`. That is
+every route that queues work — **including document upload with
+`process_now=false`, which is how work gets into the system at all.**
+
+It passed every test because pytest imports the worker tests into the same
+process, so the registry was populated for free. A test sharing a process with
+the suite cannot see this; `test_app_wiring.py` runs in a **subprocess** and
+fails without the fix.
+
+Clean-room result otherwise: empty database → 7 migrations → 37 tables, 38
+native enums → seed → integrity clean → API + worker up → login, dashboard,
+exceptions, receipt, correction, refusal-of-over-correction, order detail,
+audit trail all correct.
+
+---
+
+Four reviewers were given the code and told to find **new** defects, with the
+already-known list excluded. Between them they demonstrated eleven. The
+security ones were the serious find of the night.
+
+### SEC-1 — signing an email with the supplier's name made you the supplier (critical)
+
+`ingestion/pipeline.py`. `message.supplier_id` was set from
+`claim.supplier_name_text` — the name a model read **out of the untrusted
+body** — and `_sender_speaks_for_supplier` then short-circuited on that field.
+The sender's actual address was never consulted.
+
+So invariant 7's deterministic authoriser, *"the sender is who they claim to
+be"*, was satisfied by a string the attacker wrote. Anyone who could guess a
+purchase order number — they are not secret — could move its delivery date,
+and that is the one autonomous state change in the system; it propagates into
+coverage, shortages, order risk and customer promises.
+
+*Why no test caught it:* `StubProvider` never populates `supplier_name_text`,
+so the fixture suite only ever exercised the address-comparison branch. The
+bypass appears the moment a real model is configured — i.e. in production and
+not before.
+
+*Fix:* `messages.supplier_attribution` records **how** the link was made.
+Only `caller` (a signed-in operator said so) and `sender_address` (the
+transport told us) authorise anything; `extracted_text` never does. Migration
+`ebc5db85c828`; existing rows are NULL, which is not in the authoritative set.
+
+Also closed in the same function: a shared **public** mail domain conferred
+authority. Suppliers on gmail are entirely normal here, so "same domain" meant
+any gmail address could speak for them.
+
+### SEC-2 — a wildcard in an extracted name resolved to an exact match (high)
+
+`ingestion/resolution.py` passed extracted text straight into `ilike()`. `%`
+alone matched the first supplier in the table and came back as
+`exact_name, score 1.0, no review` — while the honest partial name it stood in
+for would have gone to a person as ambiguous. A direct amplifier for SEC-1:
+the attacker need not even know the supplier's registered name. Now escaped,
+with a test that a name genuinely containing `%` still matches itself.
+
+### SEC-3 — untrusted prose reached the investigator inside the *trusted* half (high)
+
+A supplier's stated reason travelled `message body → po.eta_note → exception
+summary → _build_brief`, and the summary is rendered under *"What the
+deterministic engine found"* — above the fence. A forged `END_UNTRUSTED` in
+that text passed through untouched, because `wrap_untrusted` was never
+applied. Reachable **today, with the stub**.
+
+*Fix:* the summary states what the engine determined and says a reason exists;
+the words themselves become `MESSAGE` evidence, which `_build_brief` already
+fences. The two read-only tools that returned `eta_note` raw now wrap it.
+
+### B-1 — my own debounce dropped exception sweeps permanently (critical)
+
+Reviewer B caught a regression introduced **earlier the same night**. Keying
+the debounce by a one-minute window looked right, but `enqueue` treats *any*
+existing key as absorbing — `SUCCEEDED` included. Once that window's sweep had
+run, every further request inside the window was silently dropped, and since
+nothing schedules a sweep periodically, dropped meant **lost**. Demonstrated
+end to end: a 40-day supplier delay applied to a purchase order, and the
+high-severity exception it raises never appeared.
+
+*Fix:* collapse onto a sweep that is still QUEUED or RUNNING — one that has
+not looked at the world yet will see this change too — and never onto one that
+has finished. No key at all now, so the "already succeeded, therefore skip"
+behaviour cannot come back.
+
+The lesson worth keeping: a debounce is only safe if the work it collapses
+onto has not yet observed the state being debounced.
+
+### B-2 — losing an enqueue race destroyed the caller's work (high)
+
+`enqueue` is a check-then-insert against a unique key. Two enqueuers both find
+nothing, both insert, and the loser's `IntegrityError` rolled back **the whole
+surrounding transaction** — a document extraction discarded, the job recording
+a failure that blamed a key collision having nothing to do with the document,
+and repeated attempts marching it towards DEAD. Now caught on a savepoint and
+reported as "already enqueued", which is what it means.
+
+### B-3 — a fully shipped order stayed "partially shipped" for ever (high)
+
+`_refresh_order_status` and `_refresh_po_status` derive a **parent** status
+from **all** child lines while the caller had locked only the child it was
+writing. Two dispatches on different lines of one order each saw the other as
+stale, both wrote "partially", and nothing ever recomputes it.
+
+Not just a wrong label: `PARTIALLY_SHIPPED` is an *open* status, and live
+material demand is gated on exactly that set — so the order's batches went on
+claiming yarn nobody needed, inflating every shortage and purchase
+recommendation derived from it. Fixed by locking the parent first, then the
+line, then the lot: one order everywhere.
+
+### B-4 — cloth that was made was never credited (medium-high)
+
+`complete_batch` reads `output_quantity` and writes the order line's credit
+from it, with no lock. A shift keying in 200 m while the completion form was
+open lost it: batch COMPLETED holding 1,200 m, order credited 1,000, and
+nothing ever recomputes because completion is the only caller and a completed
+batch cannot complete again.
+
+### B-5 — QC and dispatch took lot locks in opposite orders (medium)
+
+`quality._target_lots` had no `ORDER BY` at all — and the scan order is not
+stable between runs on identical data — while dispatch deliberately orders
+FIFO. Both now order by `received_at, id`. `issue_materials` had the same
+latent gap (`received_at` alone is not a total order when one delivery makes
+several lots on a day).
+

@@ -187,10 +187,33 @@ def dispatch(
         shipment.tracking_reference = tracking_reference
 
     shortfalls: list[str] = []
-    # Order lines are locked in a fixed order — by id — so two dispatches that
-    # share lines queue behind each other instead of each holding what the
-    # other needs.
+    # Lock the parent orders first, then the lines, then the lots — one order
+    # for every transaction that touches them, so nothing can cycle.
+    #
+    # The parents matter because `_refresh_order_status` derives the order's
+    # status from *all* its lines while the caller has locked only the line it
+    # is writing. Two dispatches on different lines of one order therefore
+    # each saw the other's line as stale, both concluded "partially shipped",
+    # and a fully shipped order stayed PARTIALLY_SHIPPED for ever. That is not
+    # just a wrong label: PARTIALLY_SHIPPED is an *open* status, so the order's
+    # batches went on claiming yarn nobody needed, inflating every shortage
+    # and purchase recommendation derived from it.
     ordered_lines = sorted(shipment.lines, key=lambda sl: str(sl.sales_order_line_id))
+    parent_ids = sorted(
+        {
+            order_line.sales_order_id
+            for order_line in (
+                session.get(SalesOrderLine, sl.sales_order_line_id)
+                for sl in ordered_lines
+            )
+            if order_line is not None
+        },
+        key=str,
+    )
+    for parent_id in parent_ids:
+        parent = session.get(SalesOrder, parent_id)
+        if parent is not None:
+            lock_row(session, parent)
     for line in ordered_lines:
         order_line = session.get(SalesOrderLine, line.sales_order_line_id)
         if order_line is None:

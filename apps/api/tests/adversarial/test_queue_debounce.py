@@ -12,11 +12,10 @@ from sqlalchemy import func, select
 
 from textileops.models.enums import JobStatus
 from textileops.models.platform import Job
-from textileops.services import clock
 
 # Importing the handlers registers them; enqueue refuses an unknown task.
 from textileops.workers import tasks as _tasks  # noqa: F401
-from textileops.workers.queue import DEBOUNCE_SECONDS, enqueue_debounced
+from textileops.workers.queue import enqueue_debounced
 
 
 def _pending(session) -> int:
@@ -55,21 +54,44 @@ def test_the_request_is_delayed_not_dropped(session):
     )
 
 
-def test_a_later_window_queues_a_fresh_sweep(session):
-    """Debouncing must not mean one sweep ever."""
-    with clock.frozen(clock.now()) as now:
-        enqueue_debounced(session, "recompute_exceptions", {"reason": "early"})
-        session.flush()
-        assert _pending(session) == 1
+def test_a_change_after_the_sweep_has_run_gets_its_own_sweep(session):
+    """The defect an earlier version of this had, and it was severe.
 
-    later = now.replace() + __import__("datetime").timedelta(
-        seconds=DEBOUNCE_SECONDS * 2
+    Debouncing by a time window meant the key for that window persisted after
+    the sweep SUCCEEDED — and ``enqueue`` treats any existing key as
+    absorbing. So a change arriving later in the same window was not delayed,
+    it was **dropped**: nothing schedules a sweep periodically, so it would
+    never be looked at until some unrelated ingestion happened to queue one.
+    A supplier delay could be applied to a purchase order and the
+    high-severity exception it raises never appear at all.
+    """
+    first = enqueue_debounced(session, "recompute_exceptions", {"reason": "early"})
+    session.flush()
+    assert first is not None
+
+    # The sweep runs and finishes. It has now seen the world as it was.
+    first.status = JobStatus.SUCCEEDED
+    session.flush()
+    assert _pending(session) == 0
+
+    second = enqueue_debounced(session, "recompute_exceptions", {"reason": "later"})
+    session.flush()
+    assert second is not None, (
+        "a change arriving after the sweep finished was dropped, not delayed"
     )
-    with clock.frozen(later):
-        enqueue_debounced(session, "recompute_exceptions", {"reason": "later"})
-        session.flush()
+    assert _pending(session) == 1
 
-    assert _pending(session) == 2, "a change after the window must get its own sweep"
+
+def test_a_running_sweep_still_absorbs_requests(session):
+    """A sweep that has not finished will see this change too."""
+    first = enqueue_debounced(session, "recompute_exceptions", {"reason": "first"})
+    session.flush()
+    first.status = JobStatus.RUNNING
+    session.flush()
+
+    assert enqueue_debounced(session, "recompute_exceptions", {"reason": "during"}) is None
+    session.flush()
+    assert _pending(session) == 1
 
 
 def test_debouncing_does_not_affect_targeted_jobs(session, supplier, yarn):

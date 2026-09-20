@@ -104,6 +104,20 @@ def resolve_purchase_order(session: Session, reference: str | None) -> Resolutio
 NamedEntity = Customer | Material | Supplier
 
 
+def _exactly(value: str) -> str:
+    """Escape a string so ILIKE matches it literally.
+
+    ``ilike`` was being handed extracted text unescaped, which made every
+    wildcard in it live. The text comes out of a supplier's message, so "%"
+    on its own matched the first row in the table and returned it as an
+    *exact* name match, score 1.0, no review — while the honest partial name
+    it was standing in for would have gone to a person as ambiguous. Anything
+    matched this way is used to attribute messages and facts, so a wildcard
+    was a way to be told you are whoever the database happens to list first.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _resolve_by_name(
     session: Session,
     model: type[NamedEntity],
@@ -114,10 +128,14 @@ def _resolve_by_name(
     if not text:
         return Resolution(None, "none", 0.0, [])
     stripped = text.strip()
-    exact = session.scalar(select(model).where(model.name.ilike(stripped)))
+    exact = session.scalar(
+        select(model).where(model.name.ilike(_exactly(stripped), escape="\\"))
+    )
     if exact:
         return Resolution(exact, "exact_name", 1.0, [])
-    by_code = session.scalar(select(model).where(model.code.ilike(stripped)))
+    by_code = session.scalar(
+        select(model).where(model.code.ilike(_exactly(stripped), escape="\\"))
+    )
     if by_code:
         return Resolution(by_code, "exact_reference", 1.0, [])
 

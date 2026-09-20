@@ -277,9 +277,16 @@ def _target_lots(session: Session, inspection: QCInspection) -> list[InventoryLo
     if inspection.production_batch_id:
         return list(
             session.scalars(
-                select(InventoryLot).where(
+                select(InventoryLot)
+                .where(
                     InventoryLot.production_batch_id == inspection.production_batch_id
                 )
+                # Ordered for the same reason dispatch orders its lots: each of
+                # these becomes a locked row in `_scrap_rejected`. Without an
+                # ORDER BY the scan order is not even stable between runs on
+                # identical data, so QC and dispatch could take the same lot
+                # locks in opposite orders and deadlock.
+                .order_by(InventoryLot.received_at, InventoryLot.id)
             ).all()
         )
     return []

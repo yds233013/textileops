@@ -109,14 +109,20 @@ def sessions(engine):
         # A thread killed mid-transaction can leave its backend sitting "idle
         # in transaction" holding row locks, which deadlocks the TRUNCATE
         # below and reports the failure against whichever test runs next.
-        # Safe here and nowhere else: this is a disposable test database.
+        #
+        # Only *stale* ones. A connection that has been idle in a transaction
+        # for seconds is abandoned; one that flickers through that state is
+        # somebody else working — another pytest session, a reviewer at a
+        # psql prompt — and killing it makes their tests fail for reasons they
+        # will never find. Learned the hard way.
         with engine.connect() as connection:
             connection.execute(
                 text(
                     "select pg_terminate_backend(pid) from pg_stat_activity "
                     "where datname = current_database() "
                     "and pid <> pg_backend_pid() "
-                    "and state = 'idle in transaction'"
+                    "and state = 'idle in transaction' "
+                    "and state_change < now() - interval '15 seconds'"
                 )
             )
             connection.commit()

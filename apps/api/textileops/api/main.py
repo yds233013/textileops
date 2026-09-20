@@ -45,6 +45,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    # Registering the worker handlers is a side effect of importing this
+    # module, and several routes enqueue jobs. Without it every one of them
+    # raises "No handler registered" and returns a 500 — including the
+    # document upload path, which is how work gets into the system at all.
+    # The worker process imports it for itself; the API never did, and no test
+    # noticed because pytest imports the worker tests into the same process.
+    from textileops.workers import tasks as _register_task_handlers  # noqa: F401
+
     app = FastAPI(
         title="TextileOps API",
         version=__version__,
