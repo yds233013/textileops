@@ -223,3 +223,42 @@ def queue_depth(session: Session, *, queue: str = "default") -> dict[str, int]:
             session.query(Job).filter(Job.queue == queue, Job.status == status).count()
         )
     return depth
+
+
+#: How long a pending recompute absorbs further requests for one. Long enough
+#: that a burst of ingested messages produces one sweep, short enough that an
+#: operator watching the exception list does not wait noticeably longer.
+DEBOUNCE_SECONDS = 60
+
+
+def enqueue_debounced(
+    session: Session,
+    task: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    queue: str = "default",
+    window_seconds: int = DEBOUNCE_SECONDS,
+) -> Job | None:
+    """Enqueue a whole-database sweep at most once per window.
+
+    A full exception recompute re-derives everything, so running it twice in a
+    row produces the same answer the second time. It was enqueued once per
+    ingested document and once per message with no key, which on a busy
+    morning means a queue of identical minutes-long sweeps that can never
+    drain faster than the mail arrives.
+
+    The window is part of the key, so requests inside it collapse onto the
+    pending job and the one already queued still runs — a change is delayed by
+    at most the window, never dropped.
+    """
+    from textileops.services import clock
+
+    now = clock.now()
+    bucket = int(now.timestamp() // window_seconds)
+    return enqueue(
+        session,
+        task,
+        payload,
+        queue=queue,
+        idempotency_key=f"{task}:window:{bucket}",
+    )

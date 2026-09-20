@@ -325,7 +325,112 @@ so there is a test for that too.
 **Enforced in the services**, not the routes or the UI. The banner is a report
 of the server's setting; a mode that can be stepped around with a curl command
 is a label rather than a control. Default is off, so nobody discovers they
-were in pilot mode by accident: `TEXTILEOPS_PILOT_MODE=true` turns it on.
+were in pilot mode by accident: `PILOT_MODE=true` turns it on.
 
 10 backend tests, 3 frontend.
+
+## Phases 15 + 23 — Scale data, integrity checking, and measured performance
+
+### The integrity checker
+
+`services/integrity.py` — twelve checks, strictly read-only, safe to point at
+a live database while the workers run. Each states a relationship between two
+things the system maintains separately; where they disagree, one is wrong.
+
+    lot_ledger                 stored balance == sum of that lot's movements
+    negative_stock             no lot holds a negative quantity
+    lot_status_balance         a consumed lot holds nothing
+    po_receipt_totals          line == receipts - corrections
+    over_shipped               shipped <= ordered
+    over_produced_credit       produced credit <= ordered
+    reservations               one active per batch+material; releases stamped
+    rejected_stock_available   rejected cloth is not in the sellable pool
+    approval_execution         nothing executed without an approval; one approver
+    exception_identity         one open exception per condition; resolver recorded
+    delivery_claims            "delivered" has a shipment that arrived
+    orphan_provenance          every extracted fact points at its source
+
+`textileops check` runs them, worst severity first, `--json` for CI.
+
+It immediately earned its place: pointed at the first scale dataset it found
+60 orders marked DELIVERED with no shipment — **my generator's fault**, not the
+application's, but exactly the class of thing it exists to catch. The generator
+now promotes an order to DELIVERED only from shipments that actually arrived,
+so a real finding can be told apart from generator noise.
+
+### An env-var bug found by accident
+
+`Settings` has **no env prefix** — it reads `DATABASE_URL`, not
+`TEXTILEOPS_DATABASE_URL`. I had documented `TEXTILEOPS_PILOT_MODE` in
+`.env.example`, which would have been silently ignored: a pilot would have
+been switched on and not been on. Fixed to `PILOT_MODE`. (Discovered because
+the same mistake sent 31k rows of scale data into the demo database.)
+
+### The seed was writing history backwards
+
+Restoring the demo database failed: `_seed_sales_orders` set `shipped_quantity`
+for the historic orders and `_seed_shipments` then tried to plan shipments
+against lines already showing themselves fully shipped. The Phase 2 guard
+refused it, correctly. The seed now credits the lines from the shipments that
+carried them, after those exist.
+
+### Measured, not guessed
+
+Dataset: 2,400 sales orders / 6,015 order lines / 1,800 POs / 3,569 PO lines /
+5,000 lots / 20,000 movements / 1,200 batches / 1,400 shipments / 16,000 audit
+events — 61,623 rows. Median of 5 runs (2 for the slow ones), through the real
+service calls, not raw SQL.
+
+| operation | before | after | change |
+|---|---|---|---|
+| order detail: full assessment | 3,495 ms | **293 ms** | 11.9× |
+| orders: assess every open order | 21,863 ms | **3,830 ms** | 5.7× |
+| dashboard: on-time delivery | 285 ms | **77 ms** | 3.7× |
+| exception engine: full recompute | 241,781 ms | **120,675 ms** | 2.0× |
+| material coverage: every material | 36,226 ms | **22,457 ms** | 1.6× |
+| integrity: every check | 2,682 ms | 2,920 ms | — |
+| purchase orders: open list | 300 ms | 358 ms | — |
+| audit timeline: most recent 200 | 1.7 ms | 1.7 ms | — |
+
+**What was actually wrong: N+1 queries, not missing indexes.** Assessing a
+*single* order issued **1,941 queries**, and 1,336 of them were the same
+query — one per sales order in the database. `allocate_finished_goods` sorts
+open lines by their parent order's promised date, and the sort key
+lazy-loaded that parent. Three fixes, no new indexes:
+
+1. `selectinload` the parent order in the allocation pass — 1,941 → 608
+   queries, 8,925 → 2,140 ms.
+2. `fabric_available_bulk` reads every finished-goods pool in three queries
+   instead of two per fabric — 608 → **12 queries**, 2,140 → 771 ms.
+3. `batches_by_order_line` / `shipments_by_order_line` prefetch once for the
+   whole set — `assess_open_orders` 8,086 → 1,931 queries, 24.1 → 5.0 s.
+
+I deliberately added **no indexes** here. The previously reported "53
+unindexed foreign keys" were not the bottleneck at this scale — round trips
+were. Adding indexes to a system doing 1,941 queries to answer one question
+would have made each of the 1,941 slightly faster and missed the point.
+
+### The recompute storm
+
+`recompute_exceptions` was enqueued once per processed document and once per
+processed message **with no idempotency key**. At two minutes a sweep, a busy
+morning queues sweeps faster than they can drain, and every one of them
+computes the same answer. `enqueue_debounced` keys the job by a one-minute
+window, so a burst collapses onto the pending sweep — delayed by at most the
+window, never dropped. Four tests, including one asserting that the job which
+absorbed the others is still queued to run.
+
+### Still slow, and honestly so
+
+- **Exception engine: 121 s** on 2,400 orders. Better, still too slow to feel
+  live. It is a background sweep and now debounced, so it is survivable, but
+  at a few thousand orders it needs the same batching treatment.
+- **Coverage across all materials: 22 s** for 1,000 materials — ~22 ms each,
+  about 10 queries per material.
+- `assess_open_orders` still issues ~1,900 queries: QC inspections and
+  material requirements are still fetched per batch.
+
+For a first pilot these are acceptable — a real mill starting out has
+hundreds of orders, not thousands — but they are the next thing to fix and
+should not be described as solved.
 

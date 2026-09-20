@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from textileops.core.config import settings
 from textileops.core.errors import NotFoundError
@@ -38,7 +39,7 @@ from textileops.models.production import ProductionBatch
 from textileops.models.quality import QCInspection
 from textileops.models.sales import SalesOrder, SalesOrderLine
 from textileops.services import clock
-from textileops.services.inventory import fabric_available
+from textileops.services.inventory import fabric_available_bulk
 
 ZERO = Decimal("0")
 
@@ -134,10 +135,15 @@ def allocate_finished_goods(session: Session) -> dict[uuid.UUID, Decimal]:
     how a dispatch clerk would actually do it. The result maps each line to the
     quantity of finished stock it may count on, in that line's own unit.
     """
+    # The sort below reads each line's parent order for its promised date and
+    # priority. Without loading them up front that is one query per line —
+    # 1,336 of them on a year of orders, which is how assessing a *single*
+    # order came to take nine seconds.
     lines = session.scalars(
         select(SalesOrderLine)
         .join(SalesOrder, SalesOrderLine.sales_order_id == SalesOrder.id)
         .where(SalesOrder.status.in_(OPEN_SALES_ORDER_STATUSES))
+        .options(selectinload(SalesOrderLine.sales_order))
     ).all()
 
     ordered = sorted(
@@ -149,13 +155,16 @@ def allocate_finished_goods(session: Session) -> dict[uuid.UUID, Decimal]:
         ),
     )
 
-    pools: dict[uuid.UUID, tuple[Decimal, UnitOfMeasure]] = {}
+    # Every pool in three queries rather than two per fabric. The allocation
+    # order below still matters, but what each fabric *has* does not depend on
+    # it, so it can be read once.
+    pools: dict[uuid.UUID, tuple[Decimal, UnitOfMeasure]] = fabric_available_bulk(
+        session, (line.fabric_spec_id for line in ordered)
+    )
     allocation: dict[uuid.UUID, Decimal] = {}
 
     for line in ordered:
         outstanding = line.outstanding_quantity
-        if line.fabric_spec_id not in pools:
-            pools[line.fabric_spec_id] = fabric_available(session, line.fabric_spec_id)
         pool, pool_unit = pools[line.fabric_spec_id]
         if pool <= ZERO or outstanding <= ZERO:
             allocation[line.id] = ZERO
@@ -169,11 +178,51 @@ def allocate_finished_goods(session: Session) -> dict[uuid.UUID, Decimal]:
     return allocation
 
 
+def batches_by_order_line(
+    session: Session, line_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, list[ProductionBatch]]:
+    """Every batch for a set of order lines, in one query.
+
+    Assessing an order reads its batches per line. Done one line at a time
+    across every open order that is 3,860 queries; done once it is one.
+    """
+    ids = list(line_ids)
+    if not ids:
+        return {}
+    grouped: dict[uuid.UUID, list[ProductionBatch]] = {line_id: [] for line_id in ids}
+    for batch in session.scalars(
+        select(ProductionBatch).where(ProductionBatch.sales_order_line_id.in_(ids))
+    ).all():
+        if batch.sales_order_line_id is not None:
+            grouped.setdefault(batch.sales_order_line_id, []).append(batch)
+    return grouped
+
+
+def shipments_by_order_line(
+    session: Session, line_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, list[Shipment]]:
+    """Every shipment touching a set of order lines, in one query."""
+    ids = list(line_ids)
+    if not ids:
+        return {}
+    grouped: dict[uuid.UUID, list[Shipment]] = {line_id: [] for line_id in ids}
+    rows = session.execute(
+        select(ShipmentLine.sales_order_line_id, Shipment)
+        .join(Shipment, Shipment.id == ShipmentLine.shipment_id)
+        .where(ShipmentLine.sales_order_line_id.in_(ids))
+    ).all()
+    for line_id, shipment in rows:
+        grouped.setdefault(line_id, []).append(shipment)
+    return grouped
+
+
 def assess_order(
     session: Session,
     order: SalesOrder | uuid.UUID,
     *,
     finished_goods: dict[uuid.UUID, Decimal] | None = None,
+    batches: dict[uuid.UUID, list[ProductionBatch]] | None = None,
+    shipments: dict[uuid.UUID, list[Shipment]] | None = None,
 ) -> OrderAssessment:
     if not isinstance(order, SalesOrder):
         found = session.get(SalesOrder, order)
@@ -198,15 +247,21 @@ def assess_order(
         stock_in_line_unit = finished_goods.get(line.id, ZERO)
         to_produce = quantize(max(ZERO, outstanding - stock_in_line_unit))
 
-        batches = list(
-            session.scalars(
-                select(ProductionBatch).where(ProductionBatch.sales_order_line_id == line.id)
-            ).all()
+        line_batches = (
+            batches[line.id]
+            if batches is not None and line.id in batches
+            else list(
+                session.scalars(
+                    select(ProductionBatch).where(
+                        ProductionBatch.sales_order_line_id == line.id
+                    )
+                ).all()
+            )
         )
-        open_batches = [b for b in batches if b.status in OPEN_BATCH_STATUSES]
-        batch_statuses.extend(b.status for b in batches)
+        open_batches = [b for b in line_batches if b.status in OPEN_BATCH_STATUSES]
+        batch_statuses.extend(b.status for b in line_batches)
 
-        for batch in batches:
+        for batch in line_batches:
             if batch.output_quantity > ZERO:
                 inspectable_batches += 1
             for inspection in session.scalars(
@@ -253,7 +308,7 @@ def assess_order(
                 to_produce=to_produce,
                 estimated_ready_date=ready_date,
                 promised_date=line.promised_date or order.promised_date,
-                batch_ids=[b.id for b in batches],
+                batch_ids=[b.id for b in line_batches],
                 blocked_batch_codes=blocked,
                 unit_price=line.unit_price,
             )
@@ -288,7 +343,7 @@ def assess_order(
             batches_with_output=inspectable_batches,
             open_batches=sum(1 for s in batch_statuses if s in OPEN_BATCH_STATUSES),
         ),
-        shipment_status=_shipment_status(session, order),
+        shipment_status=_shipment_status(session, order, shipments),
         lines=lines,
         outstanding_value=outstanding_value,
         value_basis=value_basis,
@@ -454,18 +509,29 @@ def _qc_status(
     return "passed"
 
 
-def _shipment_status(session: Session, order: SalesOrder) -> str:
+def _shipment_status(
+    session: Session,
+    order: SalesOrder,
+    prefetched: dict[uuid.UUID, list[Shipment]] | None = None,
+) -> str:
     line_ids = [line.id for line in order.lines]
     if not line_ids:
         return "nothing_to_ship"
-    shipments = list(
-        session.scalars(
-            select(Shipment)
-            .join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id)
-            .where(ShipmentLine.sales_order_line_id.in_(line_ids))
-            .distinct()
-        ).all()
-    )
+    if prefetched is not None:
+        seen: dict[uuid.UUID, Shipment] = {}
+        for line_id in line_ids:
+            for shipment in prefetched.get(line_id, []):
+                seen[shipment.id] = shipment
+        shipments = list(seen.values())
+    else:
+        shipments = list(
+            session.scalars(
+                select(Shipment)
+                .join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id)
+                .where(ShipmentLine.sales_order_line_id.in_(line_ids))
+                .distinct()
+            ).all()
+        )
     if not shipments:
         return "not_shipped"
     statuses = {s.status for s in shipments}
@@ -502,8 +568,21 @@ def assess_open_orders(session: Session) -> list[OrderAssessment]:
     ).all()
     # One allocation for the whole set, so the answers are mutually consistent.
     finished_goods = allocate_finished_goods(session)
+    # Batches and shipments read once for every line rather than per order. On
+    # a year of orders that is the difference between about eight thousand
+    # queries and a handful.
+    line_ids = [line.id for order in orders for line in order.lines]
+    batches = batches_by_order_line(session, line_ids)
+    shipments = shipments_by_order_line(session, line_ids)
     return [
-        assess_order(session, order, finished_goods=finished_goods) for order in orders
+        assess_order(
+            session,
+            order,
+            finished_goods=finished_goods,
+            batches=batches,
+            shipments=shipments,
+        )
+        for order in orders
     ]
 
 

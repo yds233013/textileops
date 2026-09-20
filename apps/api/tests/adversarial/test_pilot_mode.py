@@ -260,7 +260,7 @@ def test_pilot_mode_does_not_stop_observation(session, delay_message):
 def test_pilot_mode_defaults_to_off_so_it_is_an_explicit_decision(session):
     """Nobody should discover they were in pilot mode by accident.
 
-    It is turned on for a pilot deliberately, via TEXTILEOPS_PILOT_MODE.
+    it is turned on for a pilot deliberately, via PILOT_MODE.
     """
     assert settings.pilot_mode is False
     assert uuid.UUID is not None

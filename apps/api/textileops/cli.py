@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from textileops.core.db import session_scope
 from textileops.core.logging import configure_logging, get_logger
@@ -71,29 +72,67 @@ def _cmd_drain(_args: argparse.Namespace) -> int:
 
 def _cmd_check(_args: argparse.Namespace) -> int:
     """Integrity checks that should always pass. Non-zero exit if they do not."""
-    from textileops.services.inventory import ledger_discrepancies
-    from textileops.services.orders import delivery_claim_discrepancies
+    from textileops.services import integrity
 
-    failed = False
     with session_scope() as session:
-        discrepancies = ledger_discrepancies(session)
-        deliveries = delivery_claim_discrepancies(session)
+        report = integrity.run(session)
 
-    if discrepancies:
-        print(json.dumps(discrepancies, indent=2, default=str))
-        print(f"FAIL: {len(discrepancies)} lot(s) disagree with their movement ledger.")
-        failed = True
-    else:
-        print("OK: every inventory lot matches its movement ledger.")
+    if getattr(_args, "json", False):
+        print(json.dumps(report.to_dict(), indent=2, default=str))
+        return 0 if report.ok else 1
 
-    if deliveries:
-        print(json.dumps(deliveries, indent=2, default=str))
-        print(f"FAIL: {len(deliveries)} order(s) claim a delivery no shipment confirms.")
-        failed = True
-    else:
-        print("OK: every delivered order has a shipment that confirms it.")
+    print(
+        f"Checked {report.rows_examined:,} rows across {len(report.checks_run)} "
+        f"checks in {report.to_dict()['duration_seconds']}s."
+    )
+    if report.ok:
+        print("OK: every check passed.")
+        return 0
 
-    return 1 if failed else 0
+    # Worst first: an operator reading this at 6am should see the thing that
+    # matters before the thing that is merely untidy.
+    order = {"critical": 0, "high": 1, "medium": 2}
+    for finding in sorted(report.findings, key=lambda f: order.get(f.severity, 9)):
+        print(f"\n[{finding.severity.upper()}] {finding.check} — {finding.entity}")
+        print(f"  {finding.detail}")
+        for key, value in finding.values.items():
+            print(f"    {key}: {value}")
+    counts = ", ".join(f"{n} {sev}" for sev, n in sorted(report.by_severity().items()))
+    print(f"\nFAIL: {len(report.findings)} finding(s) — {counts}.")
+    return 1
+
+
+def _cmd_scale(args: argparse.Namespace) -> int:
+    """Generate bulk development data for measuring query behaviour.
+
+    Deliberately refuses to run against a production environment: this writes
+    thousands of fictional customers, and the one thing worse than slow
+    queries is fictional customers in a real database.
+    """
+    from textileops.core.config import settings
+    from textileops.seed.scale import ScaleProfile, generate
+
+    if settings.is_production:
+        print("Refusing: scale data is development-only and this is production.")
+        return 2
+
+    profile = ScaleProfile()
+    if args.multiplier != 1:
+        for field_name in vars(profile):
+            value = getattr(profile, field_name)
+            if isinstance(value, int) and field_name != "movements_per_lot":
+                setattr(profile, field_name, int(value * args.multiplier))
+
+    started = time.monotonic()
+    with session_scope() as session:
+        counts = generate(session, profile)
+    elapsed = time.monotonic() - started
+
+    total = sum(counts.values())
+    for table, count in sorted(counts.items()):
+        print(f"  {table:<32} {count:>9,}")
+    print(f"\n{total:,} rows in {elapsed:.1f}s.")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -104,6 +143,26 @@ def main(argv: list[str] | None = None) -> int:
     seed = sub.add_parser("seed", help="Load the demo textile business.")
     seed.add_argument("--reset", action="store_true", help="Delete existing data first.")
     seed.set_defaults(func=_cmd_seed)
+
+    scale = sub.add_parser(
+        "scale-data",
+        help="Generate bulk development data for benchmarking (never production).",
+    )
+    scale.add_argument(
+        "--multiplier",
+        type=float,
+        default=1.0,
+        help="Scale every count by this factor (default 1).",
+    )
+    scale.set_defaults(func=_cmd_scale)
+
+    check = sub.add_parser(
+        "check", help="Read-only integrity checks over the whole database."
+    )
+    check.add_argument(
+        "--json", action="store_true", help="Machine-readable output for CI."
+    )
+    check.set_defaults(func=_cmd_check)
 
     sub.add_parser("recompute", help="Re-derive every exception.").set_defaults(
         func=_cmd_recompute
@@ -124,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("worker", help="Run the background worker.").set_defaults(func=_cmd_worker)
     sub.add_parser("drain", help="Run queued jobs once and exit.").set_defaults(func=_cmd_drain)
-    sub.add_parser("check", help="Run data integrity checks.").set_defaults(func=_cmd_check)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

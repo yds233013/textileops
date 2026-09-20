@@ -24,7 +24,7 @@ from textileops.services import (
     procurement,
     production,
 )
-from textileops.workers.queue import enqueue, handler
+from textileops.workers.queue import enqueue, enqueue_debounced, handler
 
 logger = get_logger(__name__)
 
@@ -35,7 +35,9 @@ def process_document(session: Session, payload: dict[str, Any]) -> dict[str, Any
     if document is None:
         return {"skipped": "document not found"}
     outcome = pipeline.process_document(session, document)
-    enqueue(session, "recompute_exceptions", {"reason": "document_processed"})
+    enqueue_debounced(
+        session, "recompute_exceptions", {"reason": "document_processed"}
+    )
     return {
         "kind": document.kind.value,
         "status": document.status.value,
@@ -50,7 +52,9 @@ def process_message(session: Session, payload: dict[str, Any]) -> dict[str, Any]
     if message is None:
         return {"skipped": "message not found"}
     outcome = pipeline.process_message(session, message)
-    enqueue(session, "recompute_exceptions", {"reason": "message_processed"})
+    enqueue_debounced(
+        session, "recompute_exceptions", {"reason": "message_processed"}
+    )
     return {
         "intent": message.intent.value,
         "facts_applied": outcome.facts_applied,

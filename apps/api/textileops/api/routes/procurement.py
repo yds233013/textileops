@@ -28,7 +28,7 @@ from textileops.models.procurement import (
 )
 from textileops.services import clock
 from textileops.services import procurement as procurement_service
-from textileops.workers.queue import enqueue
+from textileops.workers.queue import enqueue_debounced
 
 router = APIRouter(tags=["procurement"])
 
@@ -430,7 +430,7 @@ def post_receipt_correction(
     # and order risk a moment ago may not be any more. Recomputed out of band
     # rather than inline: the operator's correction should not fail because a
     # sweep did.
-    enqueue(session, "recompute_exceptions", {})
+    enqueue_debounced(session, "recompute_exceptions", {})
     session.commit()
     return ReceiptCorrectionResponse(
         receipt_id=receipt.id,

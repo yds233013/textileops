@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -659,3 +660,65 @@ def fabric_available(session: Session, fabric_spec_id: uuid.UUID) -> tuple[Decim
     )
     reserved = _sum_reservations(session, fabric_spec_id=spec.id, target_unit=unit)
     return quantize(on_hand - reserved), unit
+
+
+def fabric_available_bulk(
+    session: Session, fabric_spec_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, tuple[Decimal, UnitOfMeasure]]:
+    """Finished-goods availability for many fabric specs, in three queries.
+
+    Same answer as calling :func:`fabric_available` in a loop, which is what
+    the allocation pass used to do — two queries per fabric, 600 of them on a
+    year of orders. The conversion still happens per lot because a fabric sold
+    by the yard and stocked in metres has to be converted before it is summed,
+    and doing that in SQL would put the unit table in two places.
+    """
+    ids = list(dict.fromkeys(fabric_spec_ids))
+    if not ids:
+        return {}
+
+    specs = {
+        spec.id: spec
+        for spec in session.scalars(
+            select(FabricSpec).where(FabricSpec.id.in_(ids))
+        ).all()
+    }
+    missing = [str(i) for i in ids if i not in specs]
+    if missing:
+        raise NotFoundError(f"Fabric spec(s) not found: {', '.join(missing)}")
+
+    on_hand: dict[uuid.UUID, Decimal] = dict.fromkeys(ids, ZERO)
+    for lot in session.scalars(
+        select(InventoryLot).where(
+            InventoryLot.fabric_spec_id.in_(ids),
+            InventoryLot.status == LotStatus.AVAILABLE,
+        )
+    ).all():
+        spec_id = lot.fabric_spec_id
+        if spec_id is None:
+            continue
+        spec = specs[spec_id]
+        on_hand[spec_id] = quantize(
+            on_hand[spec_id] + convert(lot.quantity_on_hand, lot.unit, spec.sale_unit)
+        )
+
+    reserved: dict[uuid.UUID, Decimal] = dict.fromkeys(ids, ZERO)
+    for reservation in session.scalars(
+        select(InventoryReservation).where(
+            InventoryReservation.fabric_spec_id.in_(ids),
+            InventoryReservation.status == ReservationStatus.ACTIVE,
+        )
+    ).all():
+        spec_id = reservation.fabric_spec_id
+        if spec_id is None:
+            continue
+        spec = specs[spec_id]
+        reserved[spec_id] = quantize(
+            reserved[spec_id]
+            + convert(reservation.quantity, reservation.unit, spec.sale_unit)
+        )
+
+    return {
+        spec_id: (quantize(on_hand[spec_id] - reserved[spec_id]), specs[spec_id].sale_unit)
+        for spec_id in ids
+    }

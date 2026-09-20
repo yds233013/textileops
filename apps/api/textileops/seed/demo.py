@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from textileops.core.config import settings
 from textileops.core.errors import ConflictError
 from textileops.core.security import hash_password
-from textileops.core.units import UnitOfMeasure
+from textileops.core.units import UnitOfMeasure, convert
 from textileops.ingestion import pipeline
 from textileops.models import Base
 from textileops.models.catalog import FabricSpec, FabricSpecComponent, Material
@@ -492,11 +492,14 @@ def _seed_sales_orders(
         out[number] = order
     session.flush()
 
-    # Historic orders are fully shipped and closed out.
+    # Historic orders were produced. They are *credited as shipped* in
+    # _seed_shipments, after the shipments that carried them exist — writing
+    # the credit first is history assembled backwards, and the over-shipping
+    # guard refuses it, correctly: a line already showing itself fully shipped
+    # has nothing left for a shipment to plan against.
     for number in ("SO-0998", "SO-0999"):
         order = out[number]
         for line in order.lines:
-            line.shipped_quantity = line.quantity
             line.produced_quantity = line.quantity
         order.closed_at = dt.datetime.combine(
             order.promised_date - dt.timedelta(days=2), dt.time(16, 0, tzinfo=dt.UTC)
@@ -788,6 +791,13 @@ def _seed_shipments(
     shipment.dispatched_at = _moment(-28, hour=18)
     shipment.actual_delivery_date = _day(-25)
     shipment.tracking_reference = "LR-884201"
+    # Credited now the shipment exists, and from what the shipment carried.
+    for shipment_line in shipment.lines:
+        order_line = session.get(SalesOrderLine, shipment_line.sales_order_line_id)
+        if order_line is not None:
+            order_line.shipped_quantity = convert(
+                shipment_line.quantity, shipment_line.unit, order_line.unit
+            )
 
     overdue = orders["SO-0999"]
     late_shipment = shipments.create_shipment(
@@ -803,6 +813,12 @@ def _seed_shipments(
     late_shipment.dispatch_date = _day(-9)
     late_shipment.dispatched_at = _moment(-9, hour=19)
     late_shipment.tracking_reference = "LR-884288"
+    for shipment_line in late_shipment.lines:
+        order_line = session.get(SalesOrderLine, shipment_line.sales_order_line_id)
+        if order_line is not None:
+            order_line.shipped_quantity = convert(
+                shipment_line.quantity, shipment_line.unit, order_line.unit
+            )
 
     ready = orders["SO-1001"]
     shipments.create_shipment(
