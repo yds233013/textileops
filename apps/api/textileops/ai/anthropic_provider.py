@@ -64,10 +64,31 @@ class AnthropicProvider(AIProvider):
         schema: type[T],
         context: dict[str, Any] | None = None,
     ) -> AIResult[T]:
+        return self._structured_from(
+            workflow=workflow,
+            system=system,
+            messages=[{"role": "user", "content": user_content}],
+            schema=schema,
+        )
+
+    def _structured_from(
+        self,
+        *,
+        workflow: str,
+        system: str,
+        messages: list[MessageParam],
+        schema: type[T],
+    ) -> AIResult[T]:
+        """One schema-constrained call over an arbitrary conversation.
+
+        Split out from :meth:`structured` so the investigation loop can ask for
+        its final answer *in the conversation it actually had*, rather than in a
+        fresh one rebuilt from truncated summaries. See :meth:`investigate`.
+        """
         started = time.perf_counter()
         attempts = 0
         last_error: str | None = None
-        messages: list[MessageParam] = [{"role": "user", "content": user_content}]
+        messages = list(messages)
 
         while attempts < max(1, settings.ai_max_retries):
             attempts += 1
@@ -238,18 +259,45 @@ class AnthropicProvider(AIProvider):
                 continue
 
             # No more tools wanted: ask for the final structured answer.
+            #
+            # Asked *in this conversation*. It used to start a fresh one whose
+            # user turn was rebuilt from `call.summary` — each tool result
+            # truncated to 300 characters — and that was wrong twice over.
+            #
+            # Grounding: the agent is instructed that every number it states
+            # must come from a tool result, and the final call is where it
+            # writes them. Handing it 300-character stubs of the data it
+            # gathered removed most of the evidence at exactly the moment it
+            # had to be cited.
+            #
+            # Trust boundary: a tool result carrying supplier text is fenced by
+            # `wrap_untrusted`, and a 300-character cut lands inside the fence
+            # and discards the closing delimiter. The rebuilt prompt therefore
+            # carried an unterminated untrusted block, which swallowed the
+            # trusted brief that followed it — including the deterministic
+            # impact figures the agent is told to quote verbatim, and the
+            # standing instruction not to obey anything inside the fence.
+            #
+            # Continuing the conversation keeps every tool_result block intact
+            # and correctly attributed, so neither problem arises.
             messages.append({"role": "assistant", "content": _text_of(response)})
-            final = self.structured(
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Now produce your final investigation as a single object "
+                        "matching the required schema, using only the evidence "
+                        "gathered above. Every quantity, date and money figure must "
+                        "come from a tool result or from the deterministic impact "
+                        "calculation in the brief; if a figure was marked "
+                        "unavailable, say that it is unavailable."
+                    ),
+                }
+            )
+            final = self._structured_from(
                 workflow=workflow,
                 system=system,
-                user_content=(
-                    "Now produce your final investigation as a single object matching the "
-                    "required schema, using only the evidence gathered above.\n\n"
-                    + "\n\n".join(
-                        f"Tool {call.name} returned: {call.summary}" for call in calls
-                    )
-                    + f"\n\nOriginal brief:\n{user_content}"
-                ),
+                messages=messages,
                 schema=schema,
             )
             return AgentResult(
