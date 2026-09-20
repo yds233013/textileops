@@ -1,0 +1,5 @@
+material_code,name,category,base_unit,composition,yarn_count_text,standard_cost,currency,reorder_point,is_active
+MAT-YRN-40S,40s Combed Cotton Yarn,yarn,kg,100% Cotton,40s,285.00,INR,2000,true
+MAT-YRN-30S,30s Combed Cotton Yarn,yarn,kg,100% Cotton,30s,262.00,INR,2500,true
+MAT-DYE-RB,Reactive Dye Royal Blue,dye,kg,,,890.00,INR,50,true
+MAT-CHM-SOFT,Silicone Softener,chemical,l,,,140.00,INR,200,true

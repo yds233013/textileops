@@ -1,0 +1,4 @@
+order_number,customer_code,order_date,promised_date,status,currency,priority,customer_po_ref,line_no,fabric_code,quantity,unit,unit_price,line_promised_date,shipped_quantity,produced_quantity
+SO-1001,CUST-001,2026-05-20,2026-07-05,confirmed,GBP,2,MER/PO/4417,1,FS-SJ180-WHT,4000,m,1.30,2026-07-05,0,0
+SO-1001,CUST-001,2026-05-20,2026-07-05,confirmed,GBP,2,MER/PO/4417,2,FS-INT200-RB,2500,yd,1.62,2026-07-05,0,0
+SO-1002,CUST-002,2026-06-01,2026-07-20,in_production,INR,3,AG/PO/8801,1,FS-PIQ220-BLK,1500,kg,402.00,2026-07-20,0,600

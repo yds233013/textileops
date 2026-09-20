@@ -1,0 +1,4 @@
+lot_code,material_code,fabric_code,quantity_on_hand,unit,status,received_at,supplier_code,location,unit_cost,currency,gsm_actual,width_cm_actual,shade_code_actual,notes
+LOT-2026-0001,MAT-YRN-40S,,1850.000,kg,available,2026-05-02,SUPP-001,Godown A,283.00,INR,,,,Opening balance
+LOT-2026-0002,MAT-YRN-30S,,920.500,kg,available,2026-05-11,SUPP-002,Godown A,260.00,INR,,,,Opening balance
+LOT-FG-0001,,FS-SJ180-WHT,1200.000,m,available,2026-06-01,,Finished goods,,,181,164.5,WHT-000,Ready to ship

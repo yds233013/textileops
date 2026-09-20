@@ -1,0 +1,3 @@
+supplier_code,name,country,contact_name,contact_email,contact_phone,currency,default_lead_time_days,is_active
+SUPP-001,Sri Balaji Spinning Mills,India,K Balaji,dispatch@sribalaji.example,+91 42 2345 6789,INR,14,true
+SUPP-002,Kumaran Yarns,India,R Kumaran,sales@kumaran.example,+91 42 2345 1111,INR,21,true

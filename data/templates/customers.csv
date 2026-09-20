@@ -1,0 +1,3 @@
+customer_code,name,country,contact_name,contact_email,contact_phone,currency,payment_terms_days,priority_tier,is_active
+CUST-001,Meridian Apparel Ltd,United Kingdom,Priya Raman,orders@meridian.example,+44 20 7946 0000,GBP,45,1,true
+CUST-002,Anand Garments,India,R Anand,anand@anandgarments.example,+91 98400 12345,INR,30,3,true

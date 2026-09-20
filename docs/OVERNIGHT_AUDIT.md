@@ -434,3 +434,56 @@ For a first pilot these are acceptable — a real mill starting out has
 hundreds of orders, not thousands — but they are the next thing to fix and
 should not be described as solved.
 
+## Phases 20 + 21 — Import readiness and the live model harness
+
+### `docs/PILOT_DATA_REQUIREMENTS.md` + `data/templates/`
+
+Twelve CSV templates with worked example rows, and a document that leads with
+the two things that must be right before anything else is collected: **units**
+and **consumption**. For cloth sold by length the consumption figure is
+checkable (`width_cm/100 × GSM/1000`), and the document says so with the
+arithmetic, because that single number drives every shortage, every purchase
+recommendation and every promised date.
+
+It also lists, plainly, what TextileOps will **reject** rather than guess
+about — an unconvertible unit, a quantity too small for its unit to hold, a
+shipped quantity exceeding the order, a blocked batch with no reason, a fabric
+with no bill of materials, an order marked delivered with no shipment that
+arrived. Better to find that out from a document than from a failed import.
+
+No real business data is in the repository, and the document says to fill the
+templates in elsewhere.
+
+### `textileops/evals/live.py`
+
+One command once a key exists: `python -m textileops.evals.live`.
+
+It is deliberately a separate module from the offline runner, because this one
+spends money and leaves the machine. **It refuses to start without
+`ANTHROPIC_API_KEY`, and refuses again if the provider resolves to the stub
+anyway** — a report headed "live model evaluation" that was actually produced
+by the deterministic rule engine is worse than no report, because it would be
+used to conclude the AI path had been verified.
+
+Records per case: model, request id, input and output tokens, latency,
+estimated cost, schema validity, and whether a **trap** was tripped. Traps —
+a yarn count read as a mass, a unit confused, an injection followed — are the
+only thing that fails the run; a missing optional field is reported and does
+not. The markdown report keeps the two visibly separate.
+
+Enforced limits: spend budget (stops the run rather than exceeding it),
+per-call timeout, max agent turns.
+
+Before any live call it takes an inventory of the investigation tool set and
+**refuses to run if anything write-capable or not declared read-only is in
+it**. That is checked in the application too, but this is the one place that
+hands a *live* model a tool list, and a regression that only appeared against
+a real model would be found by a customer.
+
+7 tests cover the guards without a key and without spending anything —
+including two that confirm the guard would actually fire, since a guard
+matching nothing looks identical to a guard passing.
+
+**Not run.** There is no API key in this environment, so no live result is
+claimed. See the handoff.
+

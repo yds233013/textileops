@@ -1,0 +1,6 @@
+fabric_code,material_code,quantity_per_sale_unit,unit,wastage_pct
+FS-SJ180-WHT,MAT-YRN-40S,0.297,kg,0.05
+FS-SJ180-WHT,MAT-CHM-SOFT,0.006,l,0.02
+FS-INT200-RB,MAT-YRN-30S,0.329,kg,0.06
+FS-INT200-RB,MAT-DYE-RB,0.011,kg,0.03
+FS-PIQ220-BLK,MAT-YRN-30S,1.080,kg,0.04

@@ -1,0 +1,2 @@
+shipment_number,customer_code,carrier,tracking_reference,status,dispatch_date,expected_delivery_date,actual_delivery_date,order_number,order_line_no,quantity,unit,notes
+SHP-5001,CUST-002,Sundaram Roadlines,LR-884201,delivered,2026-06-18,2026-06-22,2026-06-21,SO-1002,1,600,kg,Part shipment

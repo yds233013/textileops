@@ -1,0 +1,3 @@
+batch_code,fabric_code,order_number,order_line_no,stage,status,planned_quantity,unit,planned_start,planned_completion,actual_start,actual_completion,output_quantity,wastage_quantity,rejected_quantity,priority,notes
+PB-3001,FS-PIQ220-BLK,SO-1002,1,knitting,completed,1500,kg,2026-06-05,2026-06-14,2026-06-05,2026-06-15,1480,20,0,3,Ran one day over
+PB-3002,FS-SJ180-WHT,SO-1001,1,knitting,in_progress,4000,m,2026-06-18,2026-06-28,2026-06-18,,0,0,0,2,
