@@ -48,8 +48,25 @@ describe("status pill colours", () => {
   it("reads the backend enums it is checking against", () => {
     // Guards the test itself: a moved file would otherwise make every
     // assertion below vacuously pass.
+    // A count is not enough: the regex only matches lowercase values, so an
+    // enum whose values are not lowercase would be silently half-swept rather
+    // than failing. Check a known value is actually present in each.
+    const sentinels: Record<string, string> = {
+      SalesOrderStatus: "cancelled",
+      PurchaseOrderStatus: "received",
+      QCOutcome: "reject",
+      ShipmentStatus: "delivered",
+      DocumentStatus: "needs_review",
+      ExceptionStatus: "dismissed",
+      ProposalStatus: "pending_approval",
+      ExecutionStatus: "succeeded",
+      LotStatus: "quarantine",
+      ProductionStatus: "blocked",
+    };
     for (const name of RENDERED_ENUMS) {
-      expect(valuesOf(source, name).length, `${name} had no values`).toBeGreaterThan(0);
+      const values = valuesOf(source, name);
+      expect(values.length, `${name} had no values`).toBeGreaterThan(0);
+      expect(values, `${name} was only partly read`).toContain(sentinels[name]);
     }
   });
 
@@ -77,20 +94,27 @@ describe("status pill colours", () => {
     }
   });
 
-  it("covers the order roll-up statuses the API derives", () => {
+  it("gives the order roll-up statuses the right tone, not merely a tone", () => {
     // These are computed in services/orders.py rather than stored as enums, so
     // the enum sweep above cannot see them.
-    for (const value of [
-      "partially_inspected",
-      "partially_cancelled",
-      "materials_not_covered",
-      "nothing_planned",
-      "nothing_to_ship",
-      "not_shipped",
-      "not_started",
-      "not_applicable",
-    ]) {
-      expect(value in READINESS_TONE, `${value} is unmapped`).toBe(true);
+    //
+    // This used to assert only `value in READINESS_TONE` — presence, not
+    // tone. Changing materials_not_covered from "bad" to "good" left all
+    // fourteen tests green while the order page rendered "Materials not
+    // covered" in success green: exactly the class of defect this file exists
+    // to prevent.
+    const expected: Record<string, "ok" | "warn" | "bad" | "neutral"> = {
+      partially_inspected: "warn",
+      partially_cancelled: "warn",
+      materials_not_covered: "bad",
+      nothing_planned: "warn",
+      nothing_to_ship: "neutral",
+      not_shipped: "warn",
+      not_started: "neutral",
+      not_applicable: "neutral",
+    };
+    for (const [value, tone] of Object.entries(expected)) {
+      expect(READINESS_TONE[value], `${value} has the wrong tone`).toBe(tone);
     }
   });
 });

@@ -1251,6 +1251,15 @@ def run(session: Session, *, request_id: str | None = None) -> EngineResult:
                 or existing.title != detection.title
                 or existing.priority_score != score
             )
+            if changed:
+                # `detected_at` means "when we most recently saw this as it
+                # now is". It was set once at creation and never touched
+                # again, so it was an exact duplicate of `first_detected_at` —
+                # and the distinction the resolution-time metric is named for
+                # could not arise. `first_detected_at` deliberately stays put:
+                # that is what "how long did this take to deal with" is
+                # measured from.
+                existing.detected_at = now
             existing.severity = detection.severity
             existing.title = detection.title
             existing.summary = detection.summary

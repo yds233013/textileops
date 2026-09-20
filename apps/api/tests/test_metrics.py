@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from tests.conftest import make_purchase_order
 from textileops.models.enums import ExceptionStatus
 from textileops.models.exceptions import OperationalException
@@ -41,21 +43,54 @@ def test_durations_report_no_value_rather_than_a_fake_one(session):
 
 
 def test_resolution_time_is_measured_from_first_detection(session, supplier, yarn, user):
-    make_purchase_order(session, supplier, yarn, expected_in=-6)
-    session.flush()
-    exception_engine.run(session)
-    session.flush()
+    """From *first* detection, not from the most recent re-detection.
+
+    The test used to detect the condition once, so `first_detected_at` and
+    `detected_at` were the same moment and the distinction it is named for was
+    untestable: swapping one for the other in metrics.py left it green. It
+    also asserted only a count and nothing about the measured duration.
+    """
+    import datetime as dt
 
     from sqlalchemy import select
 
+    first_seen = clock.now() - dt.timedelta(days=3)
+    with clock.frozen(first_seen):
+        make_purchase_order(session, supplier, yarn, expected_in=-6)
+        session.flush()
+        exception_engine.run(session)
+        session.flush()
+
     exception = session.scalar(select(OperationalException))
+    assert exception is not None
+    original_first_seen = exception.first_detected_at
+
+    # Seen again two days later, and by then the order is later still, so the
+    # detection changes. `detected_at` moves forward; the duration must still
+    # be measured from the first sighting.
+    with clock.frozen(first_seen + dt.timedelta(days=2)):
+        exception_engine.run(session)
+        session.flush()
+    session.refresh(exception)
+    assert exception.first_detected_at == original_first_seen
+    assert exception.detected_at > exception.first_detected_at, (
+        "precondition: the condition was re-detected later"
+    )
+
     metrics.mark_exception_viewed(session, exception)
     exception.status = ExceptionStatus.RESOLVED
-    exception.resolved_at = clock.now()
+    exception.resolved_at = first_seen + dt.timedelta(days=3)
+    exception.resolved_by_user_id = user.id
     session.flush()
 
     durations = {d.label: d for d in metrics.workflow_durations(session)}
-    assert durations["Detected → resolved by a person"].count == 1
+    measured = durations["Detected → resolved by a person"]
+    assert measured.count == 1
+    # Three days from first sighting, not one from the re-detection.
+    assert measured.median_value == pytest.approx(3 * 24 * 60, rel=0.01), (
+        f"measured {measured.median_value} minutes; resolution time is being "
+        "taken from the latest detection rather than the first"
+    )
 
 
 def test_ai_summary_shows_how_much_was_stubbed(session, supplier, yarn):

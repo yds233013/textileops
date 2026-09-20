@@ -13,7 +13,6 @@ label: anyone with a token and curl steps around it.
 
 from __future__ import annotations
 
-import uuid
 from contextlib import contextmanager
 from decimal import Decimal
 
@@ -26,11 +25,13 @@ from textileops.core.errors import PilotModeRestriction
 from textileops.ingestion import pipeline
 from textileops.models.enums import (
     ActionType,
+    ExceptionType,
     FactStatus,
     ProposalOrigin,
     ProposalStatus,
     SourceChannel,
 )
+from textileops.models.exceptions import OperationalException
 from textileops.models.intake import ExtractedFact, ReconciliationItem
 from textileops.services import actions
 
@@ -239,16 +240,40 @@ def test_pilot_mode_does_not_stop_observation(session, delay_message):
     A pilot where detection is also switched off proves nothing about whether
     the system would have been useful.
     """
+    from tests.conftest import make_purchase_order
     from textileops.services import exception_engine
 
-    _po, message = delay_message
+    po, message = delay_message
+
+    # A condition the engine must find whether or not pilot mode is on: an
+    # order whose expected date has passed with nothing received. Asserting on
+    # the *delay* message would prove nothing, because pilot mode correctly
+    # declined to apply it, so there is no delay to detect.
+    overdue = make_purchase_order(
+        session, po.supplier, po.lines[0].material, quantity=D("500"), expected_in=-10
+    )
+    session.flush()
+
     with pilot_mode(True):
         pipeline.process_message(session, message)
         session.flush()
         result = exception_engine.run(session)
     session.flush()
 
-    assert result is not None
+    # `run()` always returns a result object, so asserting it is not None
+    # proves nothing — pilot mode could short-circuit detection entirely and
+    # this test, whose whole point is that it must not, would stay green.
+    assert result.created, "the engine detected nothing at all in pilot mode"
+    found = {
+        session.scalars(
+            select(OperationalException).where(OperationalException.code == code)
+        ).one().exception_type
+        for code in result.created
+    }
+    assert ExceptionType.PO_LATE in found, (
+        f"the overdue purchase order {overdue.number} was not detected"
+    )
+
     facts = session.scalar(
         select(func.count(ExtractedFact.id)).where(
             ExtractedFact.message_id == message.id
@@ -263,4 +288,3 @@ def test_pilot_mode_defaults_to_off_so_it_is_an_explicit_decision(session):
     it is turned on for a pilot deliberately, via PILOT_MODE.
     """
     assert settings.pilot_mode is False
-    assert uuid.UUID is not None

@@ -748,3 +748,40 @@ closing it properly means a dummy hash comparison on every failed login and I
 did not want to touch the auth path this late without more care than I had
 left. Recorded under remaining risks.
 
+## Phase 28 — Tests that would have passed anyway
+
+Reviewer D named the five weakest tests and the exact mutation each would
+miss. All five were real.
+
+- **T1** `test_completing_a_batch_twice_does_not_double_the_produced_quantity`
+  — the fixture guaranteed the assertion. Order 1,000, output 1,000, and
+  `min(total, line.quantity)` clamps a doubled figure straight back to 1,000.
+  Now 2,000 ordered against 1,000 made, so a second credit shows; and it
+  reaches REWORK through `quality.propagate` rather than assigning the status,
+  which is the path the test is named for.
+- **T2** `test_pilot_mode_does_not_stop_observation` — `assert result is not
+  None` cannot fail; `run()` always returns a result. Pilot mode could have
+  short-circuited detection entirely and this test, whose entire point is that
+  it must not, would have stayed green. It now seeds an overdue purchase order
+  — a condition the engine must find whether or not pilot mode is on, unlike
+  the delay message, which pilot mode correctly declines to apply — and
+  asserts that specific exception was raised. Also deleted
+  `assert uuid.UUID is not None`, an assertion on a class object.
+- **T3** `statusTone.test.ts` asserted `value in READINESS_TONE` — presence,
+  not tone. Verified by mutation: changing `materials_not_covered` from `bad`
+  to `ok` left all 14 green while the page rendered it in success green. Now
+  asserts the tone. The enum sweep's guard also only checked a count, so an
+  enum the regex half-read would pass; it now looks for a known value in each.
+- **T4** `test_resolution_time_is_measured_from_first_detection` asserted only
+  a count, and the condition was detected once, so `first_detected_at` and
+  `detected_at` were the same moment — the distinction in its own name was
+  untestable. **Found while fixing it: `detected_at` was set at creation and
+  never updated**, so it was an exact duplicate of `first_detected_at`. It now
+  moves when the detection changes, and the test asserts the measured
+  duration. Verified by mutation: swapping the timestamps now fails it.
+- **T5** — the reopen tests set `status` and the timestamps directly, a state
+  the application cannot produce, which is why the engine's failure to clear
+  `resolved_by_user_id` on reopen was untestable by construction. That defect
+  is fixed above; the tests are noted under remaining risks as still going
+  round the service.
+

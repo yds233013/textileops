@@ -318,7 +318,11 @@ def test_completing_a_batch_twice_does_not_double_the_produced_quantity(
         unit=UnitOfMeasure.KG,
         received_at=moment(-3),
     )
-    order = make_sales_order(session, customer, fabric, quantity=D("1000"))
+    # The order is deliberately larger than the batch. With both at 1,000 the
+    # `min(total, line.quantity)` cap hid double-counting entirely: the
+    # doubled figure clamped back to 1,000 and the assertion passed either
+    # way. 2,000 ordered and 1,000 made means a second credit shows up.
+    order = make_sales_order(session, customer, fabric, quantity=D("2000"))
     batch = make_batch(session, fabric, order, quantity=D("1000"), start_in=-6, days=4)
     production.schedule_batch(session, batch)
     production.start_batch(session, batch, at=moment(-6))
@@ -327,8 +331,25 @@ def test_completing_a_batch_twice_does_not_double_the_produced_quantity(
     session.flush()
     assert order.lines[0].produced_quantity == D("1000.000")
 
-    batch.status = ProductionStatus.REWORK
+    # Through the real path: a QC rework, not a hand-assigned status. The
+    # point of the test is the complete -> rework -> complete cycle, and
+    # setting the column directly skipped the part that does the work.
+    inspection = quality.record_inspection(
+        session,
+        code="QC-REWORK-1",
+        outcome=QCOutcome.REWORK,
+        inspected_quantity=D("1000"),
+        accepted_quantity=D("0"),
+        rejected_quantity=D("1000"),
+        unit=UnitOfMeasure.METRE,
+        production_batch_id=batch.id,
+    )
+    quality.propagate(session, inspection, schedule_replacement=False)
     session.flush()
+    assert batch.status == ProductionStatus.REWORK
+
     production.complete_batch(session, batch)
     session.flush()
-    assert order.lines[0].produced_quantity == D("1000.000")
+    assert order.lines[0].produced_quantity == D("1000.000"), (
+        "completing twice credited the order twice"
+    )
