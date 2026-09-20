@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+# ...and the per-app templates, which the blanket .env.* rule above
+# would otherwise swallow. These hold no secret, only variable names.
+!.env.local.example
+!*.env.example
 
 # Python
 __pycache__/
