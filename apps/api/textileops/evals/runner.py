@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any
 
 from textileops.ai.prompts import (
@@ -25,6 +24,7 @@ from textileops.ai.prompts import (
 from textileops.ai.provider import get_provider
 from textileops.ai.schemas import DocumentExtraction, SupplierMessageExtraction
 from textileops.evals.fixtures import DOCUMENT_CASES, MESSAGE_CASES, ExtractionCase
+from textileops.evals.scoring import document_actuals, message_actuals, score
 
 
 @dataclass
@@ -45,18 +45,6 @@ class CaseResult:
             "skipped": self.skipped,
             "notes": self.notes,
         }
-
-
-def _message_actuals(value: SupplierMessageExtraction) -> dict[str, Any]:
-    return {
-        "intent": value.intent.value,
-        "delay_days": value.delay_days,
-        "purchase_order_reference": value.purchase_order_reference,
-        "quantity_value": _plain(value.quantity.value) if value.quantity else None,
-        "quantity_unit": value.quantity.unit_text.lower() if value.quantity else None,
-        "has_date": value.new_expected_date_text is not None,
-        "requires_human_review": value.requires_human_review,
-    }
 
 
 def evaluate_message_case(case: ExtractionCase, provider, stub: bool) -> CaseResult:
@@ -85,39 +73,13 @@ def evaluate_message_case(case: ExtractionCase, provider, stub: bool) -> CaseRes
             notes=[f"No valid extraction: {result.validation_error}"],
         )
 
-    actuals = _message_actuals(result.value)
-    notes: list[str] = []
-    trap = False
-    passed = True
-
-    for field_name, expected in case.expect.items():
-        actual = actuals.get(field_name)
-        if _normalise(actual) != _normalise(expected):
-            passed = False
-            notes.append(f"expected {field_name}={expected!r}, got {actual!r}")
-
-    for field_name, forbidden in case.must_not.items():
-        if _normalise(actuals.get(field_name)) == _normalise(forbidden):
-            trap = True
-            passed = False
-            notes.append(f"TRAP: {field_name} must never be {forbidden!r}")
-
-    if (
-        case.expect_review is not None
-        and actuals["requires_human_review"] != case.expect_review
-    ):
-        passed = False
-        notes.append(
-            f"expected requires_human_review={case.expect_review}, "
-            f"got {actuals['requires_human_review']}"
-        )
-
+    scored = score(case, message_actuals(result.value))
     return CaseResult(
         key=case.key,
         description=case.description,
-        passed=passed,
-        trap_tripped=trap,
-        notes=notes,
+        passed=scored.passed,
+        trap_tripped=scored.trap_tripped,
+        notes=scored.notes,
     )
 
 
@@ -131,25 +93,14 @@ def evaluate_document_case(case: ExtractionCase, provider, stub: bool) -> CaseRe
     if result.value is None:
         return CaseResult(case.key, case.description, False, True, ["No valid extraction."])
 
-    notes: list[str] = []
-    passed = True
-    minimum = case.expect.get("min_lines")
-    if minimum is not None and len(result.value.lines) < minimum:
-        passed = False
-        notes.append(f"expected at least {minimum} lines, got {len(result.value.lines)}")
-    return CaseResult(case.key, case.description, passed, False, notes)
-
-
-def _plain(value: Decimal) -> str:
-    """Render a quantity the way a person writes it, never as 1E+4."""
-    text = format(value.normalize(), "f")
-    return text.rstrip("0").rstrip(".") if "." in text else text
-
-
-def _normalise(value: Any) -> Any:
-    if isinstance(value, str):
-        return value.strip().lower()
-    return value
+    scored = score(case, document_actuals(result.value))
+    return CaseResult(
+        key=case.key,
+        description=case.description,
+        passed=scored.passed,
+        trap_tripped=scored.trap_tripped,
+        notes=scored.notes,
+    )
 
 
 def run() -> dict[str, Any]:

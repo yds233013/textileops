@@ -14,8 +14,14 @@ echo "=== Backend: types ==="
 echo "=== Backend: tests ==="
 (cd apps/api && .venv/bin/python -m pytest -q -m "not ai_live")
 
-echo "=== AI evaluations ==="
-(cd apps/api && .venv/bin/python -m textileops.evals.runner >/dev/null && echo "evals passed")
+echo "=== AI evaluations (deterministic stub) ==="
+# Pinned to the stub on purpose. This gate is meant to be deterministic and
+# offline; with AI_PROVIDER=auto it silently became a live, billable API call
+# for anyone who had configured a key, and a flaky model response would then
+# fail an unrelated verification run. The live suite is a separate, deliberate
+# command: `python -m textileops.evals.live`.
+(cd apps/api && AI_PROVIDER=stub .venv/bin/python -m textileops.evals.runner >/dev/null \
+  && echo "evals passed (stub)")
 
 echo "=== Data integrity ==="
 (cd apps/api && .venv/bin/python -m textileops.cli check)

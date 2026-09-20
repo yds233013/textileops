@@ -39,6 +39,7 @@ from textileops.ai.prompts import (
 )
 from textileops.ai.schemas import DocumentExtraction, SupplierMessageExtraction
 from textileops.evals.fixtures import DOCUMENT_CASES, MESSAGE_CASES, ExtractionCase
+from textileops.evals.scoring import document_actuals, message_actuals, score
 
 #: Published per-million-token prices for the default model. Used only to stop
 #: a runaway run; the report says plainly that the figure is an estimate.
@@ -114,32 +115,24 @@ def _assert_no_write_tools() -> list[str]:
     return names
 
 
-def _check(case: ExtractionCase, value: Any) -> tuple[bool, bool, list[str]]:
-    """Apply the case's expectations. Returns (passed, trap_tripped, notes)."""
-    notes: list[str] = []
-    trap = False
-    passed = True
+def _check(
+    case: ExtractionCase, value: Any, workflow: str
+) -> tuple[bool, bool, list[str]]:
+    """Apply the case's expectations. Returns (passed, trap_tripped, notes).
 
-    for field_name, expected in (case.expect or {}).items():
-        actual = getattr(value, field_name, None)
-        if isinstance(expected, str) and isinstance(actual, str):
-            ok = expected.lower() in actual.lower()
-        else:
-            ok = str(actual) == str(expected)
-        if not ok:
-            passed = False
-            notes.append(f"{field_name}: expected {expected!r}, got {actual!r}")
-
-    for field_name, forbidden in (case.must_not or {}).items():
-        actual = getattr(value, field_name, None)
-        if actual is not None and str(actual) == str(forbidden):
-            trap = True
-            passed = False
-            notes.append(
-                f"TRAP {field_name}: produced {forbidden!r}, which is the "
-                "specific wrong answer this case exists to catch"
-            )
-    return passed, trap, notes
+    Delegates to :mod:`textileops.evals.scoring`, which is also what the
+    offline runner uses. This function used to do its own ``getattr`` on the
+    Pydantic model, and every field name a case uses — ``quantity_value``,
+    ``quantity_unit``, ``has_date`` — is a *derived* name the schema does not
+    define. So every expectation compared against ``None`` and failed, and
+    every trap was skipped by an ``actual is not None`` guard: the live suite
+    reported zero traps whatever the model answered, and exited 0.
+    """
+    actuals = (
+        message_actuals(value) if workflow == "supplier_message" else document_actuals(value)
+    )
+    scored = score(case, actuals)
+    return scored.passed, scored.trap_tripped, scored.notes
 
 
 def run(
@@ -149,16 +142,22 @@ def run(
     max_turns: int = DEFAULT_MAX_TURNS,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise SystemExit(
-            "ANTHROPIC_API_KEY is not set. This suite exists to exercise a real "
-            "model; falling back to the deterministic stub would produce a "
-            "report that looks like a live run and is not one. Run "
-            "`python -m textileops.evals.runner` for the offline suite."
-        )
-
     import textileops.core.config as config_module
     from textileops.core.config import Settings
+
+    # Look where the application looks. The documented way to configure a key
+    # is `.env` (see `.env.example`), which reaches `Settings` but never
+    # `os.environ` — so gating on the environment variable alone refused to
+    # run for a correctly configured install and told the operator the key was
+    # not set. Both sources count; neither being present still refuses.
+    if not (os.environ.get("ANTHROPIC_API_KEY") or Settings().anthropic_api_key):
+        raise SystemExit(
+            "ANTHROPIC_API_KEY is not set, in the environment or in .env. This "
+            "suite exists to exercise a real model; falling back to the "
+            "deterministic stub would produce a report that looks like a live "
+            "run and is not one. Run "
+            "`python -m textileops.evals.runner` for the offline suite."
+        )
 
     # Point the process at the real provider for the run, and put everything
     # back afterwards. Anything may import this module, so leaving
@@ -260,7 +259,7 @@ def _run_cases(
             )
             continue
 
-        passed, trap, notes = _check(case, result.value)
+        passed, trap, notes = _check(case, result.value, workflow)
         results.append(
             LiveCaseResult(
                 key=case.key,
