@@ -623,7 +623,15 @@ def _propagate_produced_quantity(session: Session, batch: ProductionBatch) -> No
     # This batch is mid-transition and may not be in the query result yet.
     if batch.status == ProductionStatus.COMPLETED and batch.id not in seen:
         total += convert(batch.output_quantity, batch.unit, line.unit)
-    line.produced_quantity = quantize(total)
+
+    # Capped at what the line asked for. Mills overproduce — a 1,000 m order
+    # can come off the machine at 1,200 m — and the surplus is real cloth, but
+    # it does not belong to this line. Finished goods are one pool, so the
+    # extra is available to whoever needs it next; writing 1,200 here would
+    # make the line's outstanding quantity negative and claim the customer
+    # ordered more than they did. The true figure stays on the batch, in
+    # ``output_quantity``.
+    line.produced_quantity = quantize(min(total, line.quantity))
 
 
 def create_rework_batch(

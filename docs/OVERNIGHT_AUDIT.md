@@ -256,3 +256,42 @@ leaves its backend "idle in transaction" holding row locks. Teardown now
 disposes the pool and terminates stray idle-in-transaction backends before
 truncating.
 
+## Phase 5 — Inventory accounting proof
+
+`test_ledger_invariants.py` states the identities in one place and then
+generates operation sequences to attack them. Hypothesis picks from eleven
+operations — receive, partial receive, correct, start, issue, record output,
+complete, pass QC, reject QC, dispatch, cancel — in any order, and the full
+identity set is checked after **every step**, not just at the end.
+
+    I1  lot.quantity_on_hand == sum of that lot's movements
+    I2  lot.quantity_on_hand >= 0
+    I3  line.received_quantity == sum(receipts) - sum(corrections)
+    I4  line.shipped_quantity <= line.quantity
+    I5  line.produced_quantity <= line.quantity
+    I6  a lot's status and its balance agree
+    I7  one active reservation per batch and material
+
+A business refusal mid-sequence is rolled back to a savepoint and the run
+continues — a refusal is the system defending an invariant, and what the test
+is really looking for is a refusal that leaves state half-applied.
+
+### L-1 — overproduction credited an order line beyond its own size (medium)
+
+*Found by:* Hypothesis, on the sequence `[record_output, complete_batch]` with
+output exceeding the order.
+
+A 1,000 m order came off the machine at 1,200 m and the line was credited with
+1,200, making its outstanding quantity negative and asserting the customer had
+ordered more than they had. Mills overproduce routinely, so this is not an
+exotic input.
+
+*Fix:* the credit is capped at the ordered quantity. The surplus is real cloth
+and stays visible — on the batch as `output_quantity`, and in the
+finished-goods pool where the next order can draw it. *Regression:*
+`test_overproduction_does_not_credit_the_order_line_beyond_its_size`.
+
+Worth noting how it surfaced: the `produced_within_ordered` CHECK added in
+Phase 2 turned what would have been a silently negative outstanding figure
+into a loud failure.
+

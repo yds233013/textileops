@@ -374,3 +374,47 @@ def test_output_can_be_recorded_more_than_once_for_one_batch(session, fabric, ya
         )
     )
     assert made == D("1600.000"), "both shifts' cloth must be in stock"
+
+
+def test_overproduction_does_not_credit_the_order_line_beyond_its_size(
+    session, fabric, yarn, customer
+):
+    """Found by property-based testing, not by hand.
+
+    A 1,000 m order came off the machine at 1,200 m. Mills overproduce and the
+    surplus is real cloth — but it does not belong to this line. Crediting
+    1,200 makes the line's outstanding quantity negative and says the customer
+    ordered more than they did. The true figure stays on the batch; the
+    surplus goes to the finished-goods pool, where the next order can have it.
+    """
+    inventory.create_lot(
+        session,
+        lot_code=f"LOT-{uuid.uuid4().hex[:8].upper()}",
+        unit=UnitOfMeasure.KG,
+        quantity=D("5000.000"),
+        material_id=yarn.id,
+    )
+    order = make_sales_order(session, customer, fabric, quantity=D("1000"))
+    batch = make_batch(session, fabric, order, quantity=D("1000"))
+    session.flush()
+    production.start_batch(session, batch)
+    production.issue_materials(session, batch)
+    production.record_output(
+        session, batch, good_quantity=D("1200"), unit=UnitOfMeasure.METRE
+    )
+    production.complete_batch(session, batch)
+    session.flush()
+
+    line = order.lines[0]
+    assert batch.output_quantity == D("1200.000"), "the batch records what was made"
+    assert line.produced_quantity == D("1000.000"), (
+        "the line is credited with what it ordered, not with the surplus"
+    )
+    assert line.outstanding_quantity >= D("0.000")
+
+    made = session.scalar(
+        select(func.coalesce(func.sum(InventoryLot.quantity_on_hand), D("0"))).where(
+            InventoryLot.production_batch_id == batch.id
+        )
+    )
+    assert made == D("1200.000"), "all 1,200 m is physically in stock"
