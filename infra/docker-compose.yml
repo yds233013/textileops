@@ -1,0 +1,26 @@
+# Local development infrastructure for TextileOps.
+#
+# Only PostgreSQL is required. Background jobs use a PostgreSQL-backed queue
+# (SELECT ... FOR UPDATE SKIP LOCKED) rather than Redis/Celery, so local
+# development needs exactly one service to be running. See docs/ARCHITECTURE.md.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: textileops-postgres
+    environment:
+      POSTGRES_USER: textileops
+      POSTGRES_PASSWORD: textileops
+      POSTGRES_DB: textileops
+    # Host port 55432 to avoid clashing with a system PostgreSQL on 5432 or other local stacks.
+    ports:
+      - "55433:5432"
+    volumes:
+      - textileops-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U textileops -d textileops"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  textileops-pgdata:
