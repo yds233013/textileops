@@ -839,3 +839,112 @@ Two things the gate itself caught, which is the point of running it:
   where Hypothesis happened to try that pair: the property tests are worth
   repeating, not running once.
 
+
+---
+
+# Live-model validation (2026-09-20, with a real API key)
+
+Model: **claude-sonnet-5**. Full detail in `docs/LIVE_AI_VALIDATION.md`.
+
+Four defects, all in code that only executes when a key is configured — which
+is why a green suite had said nothing about any of them.
+
+### LIVE-1 (critical) — the live evaluation could not fail
+
+`evals/live.py::_check` read each case's field names off the Pydantic model
+with `getattr`. Every name a case uses (`quantity_value`, `quantity_unit`,
+`has_date`) is derived, not a schema attribute, so every comparison was against
+`None`: correct extractions failed every expectation, and every `must_not` trap
+was skipped by an `actual is not None` guard. `traps_tripped` was structurally
+zero and the suite exited 0 whatever the model answered.
+
+*Reproduction:* score the `yards_are_not_metres` case against an extraction
+reporting 10,000 **metres** — the exact answer the trap forbids. Old scorer:
+`trap=False`. A perfect answer scored as a double failure.
+
+*Root cause:* two implementations of "what a case means". `runner.py` projected
+the schema correctly; `live.py` re-implemented it wrongly.
+
+*Fix:* one shared `evals/scoring.py`. Structurally, an expectation naming a
+field no projection produces now raises instead of degrading to `None` —
+that silence is what hid it.
+
+*Regression:* five tests in `test_live_eval_guards.py`, including
+`test_every_fixture_expectation_is_readable_by_the_projection`, which would
+have caught this offline on the day the harness was written.
+
+### LIVE-2 (high) — the harness refused a correctly configured key
+
+It gated on `os.environ["ANTHROPIC_API_KEY"]`. The documented place to put a
+key is `.env`, which reaches `Settings` and never the environment, so a correct
+install was told its key was not set.
+
+The guard test had the mirror-image blind spot: it cleared only the environment
+variable, so on a machine with a configured key it fell through the refusal and
+ran the entire suite against the live model **from inside pytest**. A test that
+quietly spends money is a defect in the test.
+
+### LIVE-3 (high) — `verify.sh` became a billable network call
+
+The "deterministic" evaluation ran with `AI_PROVIDER` unset, i.e. `auto`. The
+moment a key existed, the project's verification gate started making live API
+calls whose flakiness could fail an unrelated run. Pinned to the stub; the live
+suite is a separate, deliberate command.
+
+### LIVE-4 (medium/high) — the untrusted fence did not survive the agent loop
+
+`investigate()` ended by starting a *fresh* conversation whose user turn was
+rebuilt from `ToolCallRecord.summary` — each tool result cut to 300 characters.
+A `search_messages` result is `wrap_untrusted`-fenced supplier text, and a
+300-character cut lands inside the fence and discards the closing delimiter.
+The rebuilt prompt therefore carried an **unterminated untrusted block** that
+swallowed the trusted brief after it, including the deterministic impact
+figures the agent is instructed to quote verbatim.
+
+The same truncation gutted grounding: the agent must cite tool results, and the
+final call is where it writes the figures — it was being handed 300-character
+stubs of its own evidence at that moment.
+
+*Fix:* the final synthesis continues the conversation it actually had, so every
+`tool_result` block stays intact and correctly attributed.
+
+*Regression:* `tests/adversarial/test_agent_prompt_integrity.py`, driven by a
+scripted client so it needs no key. Three of its four tests go red against the
+old implementation and green against the fix (verified by reverting).
+
+### LIVE-5 (high) — the deterministic suite read the developer's `.env`
+
+Found by causing it. `PILOT_MODE=true` was set in `.env` to do this work — the
+posture the pilot documentation tells an operator to adopt — and eleven backend
+tests failed immediately, across ingestion and the API.
+
+`Settings` reads `.env`, and `tests/conftest.py` pinned `ENVIRONMENT` and
+`AI_PROVIDER` but not `PILOT_MODE`. So the suite's verdict depended on local
+configuration, and the one configuration guaranteed to break it is the one a
+real pilot uses. The failures named ingestion and the API; none of them named
+the setting responsible.
+
+*Fix:* pin `PILOT_MODE=false` alongside the others, and a test that asserts the
+suite pins each of the three — a stronger claim than the existing
+"pilot mode is off", which would keep passing on a machine that had simply
+never configured it.
+
+### Coverage added
+
+* `tests/ai_live/` (13 tests) — the real ingestion and investigation paths
+  against a real model. The authority tests assert both that the live model
+  **is** fooled by a forged signature and that the delivery date does not move,
+  so the protection is demonstrably the deterministic check.
+* `tests/adversarial/test_model_field_authority.py` (10 tests) — every
+  model-populated field has a declared reach; `provenance`, `resolution`,
+  `caution` or `label`, never `authority`. Adding a schema field fails until
+  someone classifies it.
+* Nine new evaluation fixtures: grams/tonnes/kilograms (the mass units were
+  entirely uncovered), four injection cases aimed at distinct capabilities, a
+  forwarded message, and a delay with nothing actionable in it.
+
+### Not covered
+
+Document upload end to end against a live model; cost figures are estimated
+from token counts, never billed; every live pass is evidence about one model on
+one day, which is why the assertions are on database state and not on prose.

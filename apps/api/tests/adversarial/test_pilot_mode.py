@@ -288,3 +288,30 @@ def test_pilot_mode_defaults_to_off_so_it_is_an_explicit_decision(session):
     it is turned on for a pilot deliberately, via PILOT_MODE.
     """
     assert settings.pilot_mode is False
+
+
+def test_the_test_suite_pins_the_settings_that_change_behaviour():
+    """A deterministic suite must not depend on a developer's `.env`.
+
+    `Settings` reads `.env`, so any setting the suite does not pin is whatever
+    that machine happens to have. Turning `PILOT_MODE=true` on in a `.env` —
+    which is precisely what a pilot deployment does, and what the pilot
+    documentation instructs — flipped eleven tests at once, because pilot
+    mode's entire job is to prevent the state change they assert. The failures
+    pointed at ingestion and the API, not at the configuration that caused
+    them.
+
+    The test above asserts pilot mode is off. This one asserts it is off
+    *because the suite pinned it*, which is a different and stronger claim.
+    """
+    import os
+
+    for name, expected in (
+        ("PILOT_MODE", "false"),
+        ("AI_PROVIDER", "stub"),
+        ("ENVIRONMENT", "test"),
+    ):
+        assert os.environ.get(name) == expected, (
+            f"{name} is not pinned by tests/conftest.py, so this suite's result "
+            "depends on local configuration"
+        )

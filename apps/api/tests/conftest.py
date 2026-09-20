@@ -23,6 +23,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("AI_PROVIDER", "stub")
+# Pinned for the same reason as the provider: `Settings` reads `.env`, so
+# without this the deterministic suite's behaviour depends on whatever the
+# developer happens to have configured locally. Turning pilot mode on in a
+# `.env` — which is exactly what a pilot deployment does — silently flipped
+# eleven tests, because pilot mode's whole job is to stop the state change
+# they assert. Tests that need it on use the `pilot_mode()` context manager
+# in tests/adversarial/test_pilot_mode.py, which restores it afterwards.
+os.environ.setdefault("PILOT_MODE", "false")
 
 from textileops.core.config import settings
 from textileops.core.security import hash_password

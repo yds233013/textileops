@@ -241,3 +241,24 @@ rule-based implementation of the provider interface, not a mock. Everything it
 produces is labelled `stubbed` in the database and in the UI. CI runs against
 it, so **deterministic tests must never require network access**. Tests that
 need a real model are marked `ai_live` and excluded by default.
+
+**Pin the provider, do not rely on there being no key.** `AI_PROVIDER=auto`
+means "live if a key is configured", so anything that does not pin the stub
+changes behaviour the day someone adds one. `verify.sh` and `tests/conftest.py`
+both pin it; `verify.sh` did not, and its "deterministic" evaluation silently
+became a billable network call. The same trap caught a guard test that cleared
+only `ANTHROPIC_API_KEY` from the environment: the key lives in `.env`, which
+reaches `Settings` and never `os.environ`, so the test fell through and ran the
+whole suite against the live model from inside pytest.
+
+**The stub cannot reach every code path, and that is where the bugs are.** The
+supplier-authority bypass survived a green suite because `StubProvider` never
+populates the field it turned on. `tests/ai_live/` exercises the real ingestion
+and investigation paths against a real model and asserts on database state, not
+on prose. See `docs/LIVE_AI_VALIDATION.md`.
+
+**Every field a model fills in has a declared reach**, in
+`tests/adversarial/test_model_field_authority.py` — `provenance`, `resolution`,
+`caution` or `label`, and deliberately never `authority`. Adding a field to an
+AI schema fails that test until somebody classifies it. That is the step that
+was skipped when `supplier_name_text` quietly became proof of identity.
