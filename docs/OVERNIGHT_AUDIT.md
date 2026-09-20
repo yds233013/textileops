@@ -188,3 +188,71 @@ Both are now covered by tests.
 
 Migration `57f3be57cca6`, upgrade and downgrade exercised.
 
+## Phase 4 — Concurrency war game
+
+Swept every service for the read-calculate-write shape: `grep` for
+accumulating assignments (`x = quantize(x ± y)`) and `+=` on mapped columns,
+then read each site to ask whether another transaction can invalidate the
+calculation between the read and the write.
+
+Eight sites found. Five were already locked (lot balances, PO line receipts,
+receipt corrections, proposals, order lines at dispatch). Three were not, all
+in `production.py`.
+
+### P-1 — a batch could only ever record output once (high)
+
+*Found by:* writing the concurrent-output test, which failed on a **unique
+constraint**, not on a lost update.
+
+The output lot code was `f"{batch.code}-OUT"`. Nothing distinguished one
+recording from the next, so the second one died on
+`uq_inventory_lots_lot_code`. This is not a race — it fails sequentially. A
+batch running across two shifts records output twice, which is ordinary, so
+this would have been hit on about the second day of a pilot.
+
+*Fix:* `_next_output_lot_code` numbers them per batch, derived under the batch
+lock. *Regression:*
+`test_output_can_be_recorded_more_than_once_for_one_batch`.
+
+### P-2 — `record_output` accumulated without a lock (high)
+
+Two shift supervisors keying in output at the same moment both read the same
+starting figure, and one shift's production disappears — from the batch, from
+the order line, and from finished goods. Fixed by locking the batch.
+
+### C-1 — `lock_row` discarded unflushed changes (high, self-inflicted)
+
+*Found by:* the existing test suite, immediately, when P-2's fix was applied.
+
+`lock_row` ends with `session.refresh()`, which overwrites in-memory state.
+Sessions here run with **autoflush off**, so a change made to the object and
+not yet written was silently thrown away. Concretely: `start_batch` set a
+status, `record_output` locked the same batch moments later, and the batch
+reverted to PLANNED.
+
+The helper now flushes before taking the lock. Worth recording because it is
+the kind of defect a new helper introduces everywhere at once, and because the
+suite caught it without being asked to — the previous three call sites happened
+not to hold dirty state, so nothing had exercised it before.
+
+### Deterministic lock ordering
+
+Two multi-row lock paths exist, and both now have a fixed order:
+
+- `dispatch` sorts its order lines by id before locking;
+- `_consume_finished_stock` orders lots by `received_at, id`.
+
+`test_two_dispatches_of_the_same_cloth_do_not_deadlock` exercises opposite-side
+acquisition.
+
+### Flakiness
+
+Concurrency suite run 6 times end to end: **6/6 green**, 11 tests each.
+
+Two harness problems fixed along the way, both of which had been reporting
+failures against innocent tests: a second pytest session against the same
+database deadlocks the TRUNCATE teardown, and a thread killed mid-transaction
+leaves its backend "idle in transaction" holding row locks. Teardown now
+disposes the pool and terminates stray idle-in-transaction backends before
+truncating.
+

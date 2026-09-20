@@ -9,6 +9,8 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from sqlalchemy import func, select
+
 from tests.conftest import (
     day,
     make_batch,
@@ -24,6 +26,7 @@ from textileops.models.enums import (
     SalesOrderStatus,
     ShipmentStatus,
 )
+from textileops.models.inventory import InventoryLot
 from textileops.services import (
     coverage,
     inventory,
@@ -326,3 +329,48 @@ def test_a_supplier_who_sends_nothing_loses_their_rating_without_delivering(
     assert supplier.on_time_rate == D("0.5000"), (
         "the overdue line with nothing received was never counted against them"
     )
+
+
+# --- Production output recorded across shifts ---------------------------------
+
+
+def test_output_can_be_recorded_more_than_once_for_one_batch(session, fabric, yarn, customer):
+    """A batch that runs over two shifts records output twice. That is normal.
+
+    The output lot code was derived as ``{batch.code}-OUT`` with nothing to
+    distinguish one recording from the next, so the second shift's entry died
+    on the lot-code unique index. Not a race — plain sequential use.
+    """
+    inventory.create_lot(
+        session,
+        lot_code=f"LOT-{uuid.uuid4().hex[:8].upper()}",
+        unit=UnitOfMeasure.KG,
+        quantity=D("5000.000"),
+        material_id=yarn.id,
+    )
+    order = make_sales_order(session, customer, fabric, quantity=D("2000"))
+    batch = make_batch(session, fabric, order, quantity=D("2000"))
+    session.flush()
+    production.start_batch(session, batch)
+    production.issue_materials(session, batch)
+    session.flush()
+
+    production.record_output(
+        session, batch, good_quantity=D("900"), unit=UnitOfMeasure.METRE
+    )
+    session.flush()
+    production.record_output(
+        session, batch, good_quantity=D("700"), unit=UnitOfMeasure.METRE
+    )
+    session.flush()
+
+    assert batch.output_quantity == D("1600.000")
+    # produced_quantity deliberately counts only *completed* batches, and this
+    # cloth is still quarantined awaiting QC, so it is correctly still zero.
+    assert order.lines[0].produced_quantity == D("0.000")
+    made = session.scalar(
+        select(func.coalesce(func.sum(InventoryLot.quantity_on_hand), D("0"))).where(
+            InventoryLot.production_batch_id == batch.id
+        )
+    )
+    assert made == D("1600.000"), "both shifts' cloth must be in stock"

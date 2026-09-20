@@ -27,13 +27,15 @@ from textileops.core.security import hash_password
 from textileops.core.units import UnitOfMeasure, quantize
 from textileops.models import Base
 from textileops.models.actions import Approval, Execution
-from textileops.models.catalog import Material
+from textileops.models.catalog import FabricSpecComponent, Material
 from textileops.models.enums import (
     ActionType,
     Currency,
     FabricFinish,
     MaterialCategory,
     MovementType,
+    ProductionStage,
+    ProductionStatus,
     ProposalOrigin,
     ProposalStatus,
     PurchaseOrderStatus,
@@ -48,8 +50,15 @@ from textileops.models.procurement import (
     PurchaseOrderLine,
     PurchaseOrderReceipt,
 )
+from textileops.models.production import ProductionBatch
 from textileops.models.sales import SalesOrder, SalesOrderLine
-from textileops.services import actions, inventory, procurement, shipments
+from textileops.services import (
+    actions,
+    inventory,
+    procurement,
+    production,
+    shipments,
+)
 
 D = Decimal
 ZERO = D("0.000")
@@ -97,6 +106,20 @@ def sessions(engine):
         # those transactions outright.
         engine.dispose()
         tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+        # A thread killed mid-transaction can leave its backend sitting "idle
+        # in transaction" holding row locks, which deadlocks the TRUNCATE
+        # below and reports the failure against whichever test runs next.
+        # Safe here and nowhere else: this is a disposable test database.
+        with engine.connect() as connection:
+            connection.execute(
+                text(
+                    "select pg_terminate_backend(pid) from pg_stat_activity "
+                    "where datname = current_database() "
+                    "and pid <> pg_backend_pid() "
+                    "and state = 'idle in transaction'"
+                )
+            )
+            connection.commit()
         with engine.begin() as connection:
             # Bounded, so a stray lock fails this teardown loudly instead of
             # hanging the whole run.
@@ -897,3 +920,168 @@ def test_two_dispatches_of_the_same_cloth_do_not_deadlock(sessions):
     assert quantize(total + physical) == D("1200.000"), (
         "cloth shipped plus cloth remaining must equal what was made"
     )
+
+
+# --- 6. Production --------------------------------------------------------
+
+
+def _batch_ready_to_run(db: Session):
+    """A started batch with its materials issued, plus enough yarn for it."""
+    fabric, customer = _fabric_and_customer(db)
+    material = _material(db)
+    db.add(
+        FabricSpecComponent(
+            fabric_spec_id=fabric.id,
+            material_id=material.id,
+            quantity_per_unit=D("0.297"),
+            unit=UnitOfMeasure.KG,
+            wastage_pct=D("0.05"),
+        )
+    )
+    db.flush()
+    inventory.create_lot(
+        db,
+        lot_code=f"LOT-{uuid.uuid4().hex[:8].upper()}",
+        unit=UnitOfMeasure.KG,
+        quantity=D("5000.000"),
+        material_id=material.id,
+    )
+    order = SalesOrder(
+        number=f"SO-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer.id,
+        status=SalesOrderStatus.CONFIRMED,
+        currency=Currency.INR,
+        order_date=dt.date(2026, 6, 1),
+        promised_date=dt.date(2026, 7, 1),
+    )
+    db.add(order)
+    db.flush()
+    line = SalesOrderLine(
+        sales_order_id=order.id,
+        line_no=1,
+        fabric_spec_id=fabric.id,
+        quantity=D("2000.000"),
+        unit=UnitOfMeasure.METRE,
+        unit_price=D("129.00"),
+    )
+    db.add(line)
+    db.flush()
+    batch = production.create_batch(
+        db,
+        code=f"PB-{uuid.uuid4().hex[:6].upper()}",
+        fabric_spec_id=fabric.id,
+        planned_quantity=D("2000.000"),
+        planned_start=dt.date(2026, 6, 10),
+        planned_completion=dt.date(2026, 6, 18),
+        stage=ProductionStage.KNITTING,
+        sales_order_line_id=line.id,
+    )
+    db.flush()
+    production.start_batch(db, batch)
+    production.issue_materials(db, batch)
+    db.flush()
+    return batch, line
+
+
+def test_two_output_recordings_on_one_batch_do_not_lose_one(sessions):
+    """Two shift supervisors key in their output at the same moment.
+
+    ``batch.output_quantity`` is accumulated read-modify-write. Both read 0,
+    both write their own figure, and one shift's production disappears — from
+    the batch, from the order line it credits, and from the finished-goods
+    total.
+    """
+    setup = sessions()
+    batch, line = _batch_ready_to_run(setup)
+    setup.commit()
+    batch_id, line_id = batch.id, line.id
+
+    def record(has_lock, other_trying):
+        db = sessions()
+        held = db.get(ProductionBatch, batch_id)
+        production.record_output(
+            db, held, good_quantity=D("500.000"), unit=UnitOfMeasure.METRE
+        )
+        has_lock.set()
+        other_trying.wait(timeout=LOCK_TIMEOUT)
+        db.commit()
+
+    def record_second(has_lock, other_trying):
+        db = sessions()
+        has_lock.wait(timeout=LOCK_TIMEOUT)
+        held = db.get(ProductionBatch, batch_id)
+        assert held.output_quantity == ZERO, "precondition: stale view"
+        other_trying.set()
+        production.record_output(
+            db, held, good_quantity=D("300.000"), unit=UnitOfMeasure.METRE
+        )
+        db.commit()
+
+    errors = _interleave(record, record_second)
+    assert errors == [None, None], f"an output recording failed: {errors!r}"
+
+    check = sessions()
+    stored = check.get(ProductionBatch, batch_id)
+    assert stored.output_quantity == D("800.000"), (
+        f"a shift's output was lost: batch shows {stored.output_quantity}"
+    )
+    made = check.scalar(
+        select(func.coalesce(func.sum(InventoryLot.quantity_on_hand), ZERO)).where(
+            InventoryLot.fabric_spec_id == stored.fabric_spec_id
+        )
+    )
+    assert made == D("800.000"), "the finished-goods total disagrees with the batch"
+    assert line_id is not None
+
+
+def test_two_completions_of_one_batch_consume_its_materials_once(sessions):
+    """Completing twice must not draw the yarn twice."""
+    setup = sessions()
+    batch, _line = _batch_ready_to_run(setup)
+    production.record_output(
+        setup, batch, good_quantity=D("2000.000"), unit=UnitOfMeasure.METRE
+    )
+    setup.commit()
+    batch_id = batch.id
+    material_id = batch.requirements[0].material_id
+
+    before = setup.scalar(
+        select(func.coalesce(func.sum(InventoryLot.quantity_on_hand), ZERO)).where(
+            InventoryLot.material_id == material_id
+        )
+    )
+
+    def complete(has_lock, other_trying):
+        db = sessions()
+        held = db.get(ProductionBatch, batch_id)
+        production.complete_batch(db, held)
+        has_lock.set()
+        other_trying.wait(timeout=LOCK_TIMEOUT)
+        db.commit()
+
+    def complete_again(has_lock, other_trying):
+        db = sessions()
+        has_lock.wait(timeout=LOCK_TIMEOUT)
+        held = db.get(ProductionBatch, batch_id)
+        other_trying.set()
+        try:
+            production.complete_batch(db, held)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    _interleave(complete, complete_again)
+
+    check = sessions()
+    after = check.scalar(
+        select(func.coalesce(func.sum(InventoryLot.quantity_on_hand), ZERO)).where(
+            InventoryLot.material_id == material_id
+        )
+    )
+    assert after == before, (
+        "completing twice drew the materials twice — completion consumes what "
+        "issue already took out"
+    )
+    stored = check.get(ProductionBatch, batch_id)
+    assert stored.status == ProductionStatus.COMPLETED

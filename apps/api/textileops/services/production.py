@@ -20,9 +20,10 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from textileops.core.db import lock_row
 from textileops.core.errors import IllegalStateTransition, NotFoundError, ValidationError
 from textileops.core.units import UnitOfMeasure, convert, quantize
 from textileops.models.catalog import FabricSpec
@@ -376,6 +377,12 @@ def record_output(
     if good < ZERO or waste < ZERO or rejected < ZERO:
         raise ValidationError("Output quantities cannot be negative.")
 
+    # Lock the batch before reading its running totals. Two shift supervisors
+    # keying in their output at the same moment otherwise both read the same
+    # starting figure, and one shift's production disappears — from the batch,
+    # from the order line it credits, and from finished goods.
+    lock_row(session, batch)
+
     occurred = at or clock.now()
     batch.output_quantity = quantize(batch.output_quantity + good)
     batch.wastage_quantity = quantize(batch.wastage_quantity + waste)
@@ -385,7 +392,7 @@ def record_output(
     if good > ZERO:
         lot = inventory.create_lot(
             session,
-            lot_code=lot_code or f"{batch.code}-OUT",
+            lot_code=lot_code or _next_output_lot_code(session, batch),
             fabric_spec_id=batch.fabric_spec_id,
             quantity=good,
             unit=batch.unit,
@@ -421,6 +428,32 @@ def record_output(
         after={"good": good, "wastage": waste, "rejected": rejected},
     )
     return lot
+
+
+def _next_output_lot_code(session: Session, batch: ProductionBatch) -> str:
+    """A distinct lot code for each output recording against a batch.
+
+    This used to be a bare ``{code}-OUT``, which made a batch capable of
+    recording output exactly once: the second entry died on the lot-code
+    unique index. A batch running across two shifts is ordinary, so that was
+    not an edge case — it was the second day of use.
+
+    Called with the batch row already locked, so the count cannot move
+    underneath it.
+    """
+    posted = session.scalar(
+        select(func.count(InventoryLot.id)).where(
+            InventoryLot.production_batch_id == batch.id
+        )
+    )
+    candidate = int(posted or 0) + 1
+    while session.scalar(
+        select(InventoryLot.id).where(
+            InventoryLot.lot_code == f"{batch.code}-OUT-{candidate}"
+        )
+    ):
+        candidate += 1
+    return f"{batch.code}-OUT-{candidate}"
 
 
 @dataclass

@@ -75,10 +75,15 @@ def lock_row(session: Session, instance: _T) -> _T:
     """
     mapper = object_mapper(instance)
     pk_column = mapper.primary_key[0]
+
+    # Flush first, always. This function ends with a refresh, and a refresh
+    # overwrites whatever is in memory — so any change made to this object and
+    # not yet written would be silently discarded. That is not hypothetical:
+    # ``start_batch`` sets a status and ``record_output`` locks the same batch
+    # a moment later, and without this the batch reverted to PLANNED. Sessions
+    # here run with autoflush off, so nothing else does it for us.
+    session.flush()
     pk_value = mapper.primary_key_from_instance(instance)[0]
-    if pk_value is None or instance in session.new:
-        session.flush()
-        pk_value = mapper.primary_key_from_instance(instance)[0]
 
     locked = session.execute(
         select(pk_column).where(pk_column == pk_value).with_for_update()
