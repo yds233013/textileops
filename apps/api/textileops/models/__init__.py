@@ -26,6 +26,7 @@ from textileops.models.procurement import (
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseOrderReceipt,
+    PurchaseOrderReceiptCorrection,
 )
 from textileops.models.production import (
     ProductionBatch,
@@ -62,6 +63,7 @@ __all__ = [
     "PurchaseOrder",
     "PurchaseOrderLine",
     "PurchaseOrderReceipt",
+    "PurchaseOrderReceiptCorrection",
     "QCInspection",
     "QCMeasurement",
     "ReconciliationItem",

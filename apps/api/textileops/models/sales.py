@@ -113,6 +113,18 @@ class SalesOrderLine(Base, TimestampMixin):
         UniqueConstraint("sales_order_id", "line_no", name="uq_so_line_no"),
         CheckConstraint("quantity > 0", name="quantity_positive"),
         CheckConstraint("shipped_quantity >= 0", name="shipped_non_negative"),
+        # Shipping more than was ordered gives cloth away and usually invoices
+        # for it twice. The service refuses it; this is what holds when the
+        # service is bypassed — a script, a migration, a future code path that
+        # forgets.
+        CheckConstraint(
+            "shipped_quantity <= quantity", name="shipped_within_ordered"
+        ),
+        # Same argument for production: a batch cannot credit an order line
+        # with more cloth than the line asked for.
+        CheckConstraint(
+            "produced_quantity <= quantity", name="produced_within_ordered"
+        ),
         CheckConstraint("produced_quantity >= 0", name="produced_non_negative"),
         CheckConstraint("unit_price is null or unit_price >= 0", name="unit_price_non_negative"),
         Index("ix_sales_order_lines_spec", "fabric_spec_id"),

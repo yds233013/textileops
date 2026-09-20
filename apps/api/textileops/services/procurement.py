@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from textileops.core.db import lock_row
-from textileops.core.errors import ValidationError
+from textileops.core.errors import ConflictError, ValidationError
 from textileops.core.units import UnitOfMeasure, convert, quantize
 from textileops.models.enums import (
     OPEN_PO_STATUSES,
@@ -29,11 +29,13 @@ from textileops.models.enums import (
     MovementType,
     PurchaseOrderStatus,
 )
+from textileops.models.inventory import InventoryLot
 from textileops.models.org import Supplier
 from textileops.models.procurement import (
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseOrderReceipt,
+    PurchaseOrderReceiptCorrection,
 )
 from textileops.services import clock, inventory
 from textileops.services.audit import record_audit
@@ -253,8 +255,29 @@ def _next_lot_code(session: Session, line: PurchaseOrderLine) -> str:
     return f"LOT-{line.purchase_order.number}-{line.line_no}-{int(posted or 0) + 1}"
 
 
+#: Statuses that are a claim about goods having arrived, as opposed to a
+#: lifecycle state somebody set. Only these may be derived — and, because they
+#: are derived, only these may be taken back.
+_RECEIPT_CLAIM_STATUSES = (
+    PurchaseOrderStatus.PARTIALLY_RECEIVED,
+    PurchaseOrderStatus.RECEIVED,
+)
+
+
 def _refresh_po_status(session: Session, po: PurchaseOrder) -> PurchaseOrderStatus:
-    """Derive PO status from its lines. Never set by hand during receiving."""
+    """Derive PO status from its lines. Never set by hand during receiving.
+
+    This used to be a ratchet: it could advance to PARTIALLY_RECEIVED or
+    RECEIVED and never come back. That was safe only while received quantities
+    could not fall. Corrections make them fall, so an order whose only receipt
+    was reversed would otherwise sit there saying RECEIVED with nothing in the
+    warehouse — the strongest claim the field can make, made about nothing.
+
+    Falling back is deliberately limited to the two statuses this function
+    owns. DRAFT and SENT are things a person did, not conclusions from the
+    ledger, so a reversal returns the order to ACKNOWLEDGED — the goods were
+    ordered and the supplier knew about it, which is all that is still true.
+    """
     if po.status in (PurchaseOrderStatus.CANCELLED, PurchaseOrderStatus.CLOSED):
         return po.status
     totals = [(line.received_quantity, line.ordered_quantity) for line in po.lines]
@@ -264,6 +287,8 @@ def _refresh_po_status(session: Session, po: PurchaseOrder) -> PurchaseOrderStat
         po.status = PurchaseOrderStatus.RECEIVED
     elif any(received > ZERO for received, _ in totals):
         po.status = PurchaseOrderStatus.PARTIALLY_RECEIVED
+    elif po.status in _RECEIPT_CLAIM_STATUSES:
+        po.status = PurchaseOrderStatus.ACKNOWLEDGED
     return po.status
 
 
@@ -387,3 +412,226 @@ def recompute_all_supplier_rates(session: Session) -> int:
         if before != after:
             changed += 1
     return changed
+
+
+@dataclass
+class CorrectionOutcome:
+    """What a correction did, in terms an operator can check against paperwork."""
+
+    correction: PurchaseOrderReceiptCorrection
+    receipt: PurchaseOrderReceipt
+    stock_removed: Decimal
+    line_received_quantity: Decimal
+    line_outstanding_quantity: Decimal
+    purchase_order_status: PurchaseOrderStatus
+    was_replay: bool = False
+
+
+def correct_receipt(
+    session: Session,
+    receipt: PurchaseOrderReceipt,
+    *,
+    accepted_delta: Decimal = ZERO,
+    rejected_delta: Decimal = ZERO,
+    reason: str,
+    user_id: uuid.UUID | None = None,
+    unit: UnitOfMeasure | None = None,
+    corrected_at: dt.datetime | None = None,
+    source_document_id: uuid.UUID | None = None,
+    idempotency_key: str | None = None,
+) -> CorrectionOutcome:
+    """Reduce a posted receipt by what did not actually arrive.
+
+    The receipt itself is never touched. What this writes is a correction row
+    against it plus, when stock had been brought in, the movement that takes
+    that stock back out — so the ledger still explains every kilogram it ever
+    claimed to hold.
+
+    Refused when the lot no longer holds the stock the correction would remove.
+    That is not a rounding problem: if 1,000 kg was received and 950 consumed,
+    correcting to 900 would mean 50 kg of the *consumption* also did not
+    happen, and only a person can say which of the two records is wrong.
+
+    Locks the PO line before the lot, matching ``receive``, so a correction
+    and a delivery racing on the same line queue rather than deadlock.
+    """
+    unit = unit or receipt.unit
+    accepted_drop = convert(Decimal(str(accepted_delta)), unit, receipt.unit)
+    rejected_drop = convert(Decimal(str(rejected_delta)), unit, receipt.unit)
+    if accepted_drop < ZERO or rejected_drop < ZERO:
+        raise ValidationError(
+            "A correction is expressed as the quantity that did not arrive, so "
+            "it cannot be negative. To record that more arrived than was keyed, "
+            "post another receipt — the extra goods physically turned up."
+        )
+    if accepted_drop + rejected_drop <= ZERO:
+        raise ValidationError("A correction must change some quantity.")
+    if not reason or not reason.strip():
+        raise ValidationError(
+            "A correction needs a reason. A quantity that moved with no stated "
+            "cause is the first thing anyone auditing this will ask about."
+        )
+
+    if idempotency_key:
+        existing = session.scalar(
+            select(PurchaseOrderReceiptCorrection).where(
+                PurchaseOrderReceiptCorrection.idempotency_key == idempotency_key
+            )
+        )
+        if existing is not None:
+            line = existing.receipt.purchase_order_line
+            return CorrectionOutcome(
+                correction=existing,
+                receipt=existing.receipt,
+                stock_removed=ZERO,
+                line_received_quantity=line.received_quantity,
+                line_outstanding_quantity=line.outstanding_quantity,
+                purchase_order_status=line.purchase_order.status,
+                was_replay=True,
+            )
+
+    line = receipt.purchase_order_line
+    lock_row(session, line)
+    session.refresh(receipt)
+
+    already_accepted = sum(
+        (c.accepted_delta for c in receipt.corrections), ZERO
+    )
+    already_rejected = sum(
+        (c.rejected_delta for c in receipt.corrections), ZERO
+    )
+    if quantize(already_accepted + accepted_drop) > receipt.accepted_quantity:
+        raise ConflictError(
+            f"This receipt recorded {receipt.accepted_quantity} {receipt.unit.value} "
+            f"accepted and {quantize(already_accepted)} has already been corrected "
+            f"away; {accepted_drop} more would take it below zero.",
+            details={
+                "receipt_id": str(receipt.id),
+                "accepted_quantity": str(receipt.accepted_quantity),
+                "already_corrected": str(quantize(already_accepted)),
+                "requested": str(accepted_drop),
+            },
+        )
+    if quantize(already_rejected + rejected_drop) > receipt.rejected_quantity:
+        raise ConflictError(
+            f"This receipt recorded {receipt.rejected_quantity} {receipt.unit.value} "
+            f"rejected and {quantize(already_rejected)} has already been corrected "
+            "away; the remainder is smaller than this correction.",
+            details={
+                "receipt_id": str(receipt.id),
+                "rejected_quantity": str(receipt.rejected_quantity),
+                "already_corrected": str(quantize(already_rejected)),
+                "requested": str(rejected_drop),
+            },
+        )
+
+    occurred = corrected_at or clock.now()
+    movement = None
+    stock_removed = ZERO
+
+    if accepted_drop > ZERO:
+        lot = (
+            session.get(InventoryLot, receipt.inventory_lot_id)
+            if receipt.inventory_lot_id
+            else None
+        )
+        if lot is None:
+            raise ConflictError(
+                "This receipt has no stock lot recorded against it, so there is "
+                "nothing to take back out. Raise an inventory adjustment instead, "
+                "which records that the stock itself is in question.",
+                details={"receipt_id": str(receipt.id)},
+            )
+        lock_row(session, lot)
+        removable = convert(lot.quantity_on_hand, lot.unit, receipt.unit)
+        if removable < accepted_drop:
+            raise ConflictError(
+                f"Lot {lot.lot_code} holds {removable} {receipt.unit.value}, which "
+                f"is less than the {accepted_drop} {receipt.unit.value} this "
+                "correction would remove. The stock has already been used, so "
+                "either the correction or the later movements are wrong — and "
+                "only a person can say which. Nothing has been changed.",
+                details={
+                    "lot_code": lot.lot_code,
+                    "on_hand": str(removable),
+                    "requested": str(accepted_drop),
+                    "short_by": str(quantize(accepted_drop - removable)),
+                },
+            )
+        movement = inventory.post_movement(
+            session,
+            lot=lot,
+            movement_type=MovementType.RECEIPT_CORRECTION,
+            quantity=convert(accepted_drop, receipt.unit, lot.unit),
+            occurred_at=occurred,
+            reference_type=EntityType.PURCHASE_ORDER_LINE,
+            reference_id=line.id,
+            idempotency_key=(
+                f"receipt-correction:{idempotency_key}" if idempotency_key else None
+            ),
+            note=f"Receipt correction: {reason.strip()[:200]}",
+            source_document_id=source_document_id,
+            created_by_user_id=user_id,
+        )
+        session.flush()
+        stock_removed = accepted_drop
+
+    correction = PurchaseOrderReceiptCorrection(
+        receipt_id=receipt.id,
+        purchase_order_line_id=line.id,
+        accepted_delta=accepted_drop,
+        rejected_delta=rejected_drop,
+        unit=receipt.unit,
+        reason=reason.strip(),
+        corrected_at=occurred,
+        corrected_by_user_id=user_id,
+        idempotency_key=idempotency_key,
+        inventory_movement_id=movement.id if movement is not None else None,
+        source_document_id=source_document_id,
+    )
+    session.add(correction)
+    # Anything reading receipt.corrections in this transaction — the cumulative
+    # check above, on a second correction — must see this one.
+    receipt.corrections.append(correction)
+
+    line.received_quantity = quantize(line.received_quantity - accepted_drop)
+    line.rejected_quantity = quantize(line.rejected_quantity - rejected_drop)
+
+    status = _refresh_po_status(session, line.purchase_order)
+    # The supplier delivered less than we thought, and on-time is measured from
+    # what they actually delivered, so their record changes too.
+    recompute_supplier_on_time_rate(session, line.purchase_order.supplier)
+
+    record_audit(
+        session,
+        action="purchase_order.receipt_corrected",
+        entity_type=EntityType.PURCHASE_ORDER_LINE,
+        entity_id=line.id,
+        summary=(
+            f"Receipt corrected down by {accepted_drop} {receipt.unit.value} "
+            f"accepted"
+            + (f" and {rejected_drop} rejected" if rejected_drop > ZERO else "")
+            + f" against {line.purchase_order.number} line {line.line_no} "
+            f"({line.received_quantity}/{line.ordered_quantity} "
+            f"{line.unit.value} now recorded). Reason: {reason.strip()[:200]}"
+        ),
+        actor_type="user" if user_id else "system",
+        actor_user_id=user_id,
+        before={"received_to_date": quantize(line.received_quantity + accepted_drop)},
+        after={
+            "received_to_date": line.received_quantity,
+            "ordered": line.ordered_quantity,
+            "stock_removed": stock_removed,
+            "reason": reason.strip(),
+        },
+        source_document_id=source_document_id,
+    )
+    session.flush()
+    return CorrectionOutcome(
+        correction=correction,
+        receipt=receipt,
+        stock_removed=stock_removed,
+        line_received_quantity=line.received_quantity,
+        line_outstanding_quantity=line.outstanding_quantity,
+        purchase_order_status=status,
+    )

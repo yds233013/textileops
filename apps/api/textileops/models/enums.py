@@ -108,6 +108,10 @@ class LotStatus(StrEnum):
 
 class MovementType(StrEnum):
     RECEIPT = "receipt"
+    #: Removes stock that a receipt said arrived but which did not. Distinct
+    #: from ADJUSTMENT so the ledger can still answer "what did this supplier
+    #: actually deliver?" without counting a keying error as a delivery.
+    RECEIPT_CORRECTION = "receipt_correction"
     ISSUE = "issue"
     RETURN = "return"
     ADJUSTMENT = "adjustment"

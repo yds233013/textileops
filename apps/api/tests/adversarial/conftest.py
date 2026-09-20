@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -78,3 +79,31 @@ def lot_statuses(session: Session, material_id) -> dict[str, LotStatus]:
             select(InventoryLot).where(InventoryLot.material_id == material_id)
         ).all()
     }
+
+
+@pytest.fixture
+def client_with_auth(session, user):
+    """A TestClient bound to the test transaction, plus an approver's headers.
+
+    The adversarial suite needs the HTTP boundary as often as the service one:
+    a rule enforced only below the route is not enforced at all for anyone
+    holding a token and a curl command.
+    """
+    from fastapi.testclient import TestClient
+
+    from textileops.api.deps import db_session
+    from textileops.api.main import create_app
+    from textileops.core.security import hash_password
+
+    user.password_hash = hash_password("password123")
+    session.flush()
+
+    app = create_app()
+    app.dependency_overrides[db_session] = lambda: session
+    with TestClient(app) as client:
+        token = client.post(
+            "/api/v1/auth/login",
+            json={"email": user.email, "password": "password123"},
+        ).json()["access_token"]
+        yield client, {"Authorization": f"Bearer {token}"}
+    app.dependency_overrides.clear()

@@ -21,9 +21,14 @@ from textileops.models.enums import (
 from textileops.models.exceptions import OperationalException
 from textileops.models.intake import Message
 from textileops.models.org import Supplier
-from textileops.models.procurement import PurchaseOrder, PurchaseOrderLine
+from textileops.models.procurement import (
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseOrderReceipt,
+)
 from textileops.services import clock
 from textileops.services import procurement as procurement_service
+from textileops.workers.queue import enqueue
 
 router = APIRouter(tags=["procurement"])
 
@@ -369,5 +374,72 @@ def post_receipt(
         unit=line.unit.value,
         purchase_order_status=outcome.purchase_order_status.value,
         over_received_by=outcome.over_received_by,
+        was_replay=outcome.was_replay,
+    )
+
+
+class ReceiptCorrectionRequest(BaseModel):
+    """Reduce a posted receipt by what did not actually arrive.
+
+    There is deliberately no field for increasing a receipt. If more arrived
+    than was keyed, the extra physically turned up and is recorded by posting
+    another receipt — which is both what happened and what keeps a correction
+    from ever being able to create stock.
+    """
+
+    receipt_id: uuid.UUID
+    accepted_delta: Decimal = Field(default=Decimal("0"), ge=0)
+    rejected_delta: Decimal = Field(default=Decimal("0"), ge=0)
+    unit: str | None = None
+    reason: str = Field(min_length=3, max_length=1000)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+
+
+class ReceiptCorrectionResponse(BaseModel):
+    receipt_id: uuid.UUID
+    original_accepted: Decimal
+    corrected_accepted: Decimal
+    stock_removed: Decimal
+    received_to_date: Decimal
+    outstanding: Decimal
+    unit: str
+    purchase_order_status: str
+    was_replay: bool = False
+
+
+@router.post(
+    "/purchase-orders/receipts/corrections", response_model=ReceiptCorrectionResponse
+)
+def post_receipt_correction(
+    payload: ReceiptCorrectionRequest, session: DbSession, user: ApproverUser
+) -> ReceiptCorrectionResponse:
+    receipt = session.get(PurchaseOrderReceipt, payload.receipt_id)
+    if receipt is None:
+        raise NotFoundError(f"Receipt {payload.receipt_id} not found.")
+    outcome = procurement_service.correct_receipt(
+        session,
+        receipt,
+        accepted_delta=payload.accepted_delta,
+        rejected_delta=payload.rejected_delta,
+        unit=parse_unit(payload.unit) if payload.unit else None,
+        reason=payload.reason,
+        user_id=user.id,
+        idempotency_key=payload.idempotency_key,
+    )
+    # Stock and outstanding supply both moved, so what was true about coverage
+    # and order risk a moment ago may not be any more. Recomputed out of band
+    # rather than inline: the operator's correction should not fail because a
+    # sweep did.
+    enqueue(session, "recompute_exceptions", {})
+    session.commit()
+    return ReceiptCorrectionResponse(
+        receipt_id=receipt.id,
+        original_accepted=receipt.accepted_quantity,
+        corrected_accepted=receipt.corrected_accepted_quantity,
+        stock_removed=outcome.stock_removed,
+        received_to_date=outcome.line_received_quantity,
+        outstanding=outcome.line_outstanding_quantity,
+        unit=receipt.unit.value,
+        purchase_order_status=outcome.purchase_order_status.value,
         was_replay=outcome.was_replay,
     )

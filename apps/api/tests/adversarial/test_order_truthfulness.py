@@ -186,12 +186,15 @@ def test_on_time_delivery_is_measured_from_actual_deliveries(
     # Delivered, genuinely on time.
     good = make_sales_order(session, customer, fabric, number="SO-GOOD",
                             quantity=D("100"), promised_in=-10)
-    good.lines[0].shipped_quantity = D("100")
-    good.status = SalesOrderStatus.DELIVERED
+    # Planned first, then credited — the order real events happen in. Setting
+    # shipped_quantity before the shipment exists writes a state the
+    # application cannot produce, and the over-shipping guard now says so.
     good_shipment = shipments.create_shipment(
         session, number="SHP-GOOD", customer_id=customer.id,
         lines=[(good.lines[0].id, D("100"), M)],
     )
+    good.lines[0].shipped_quantity = D("100")
+    good.status = SalesOrderStatus.DELIVERED
     good_shipment.status = ShipmentStatus.DELIVERED
     good_shipment.dispatch_date = day(-15)
     good_shipment.actual_delivery_date = day(-12)
@@ -199,13 +202,13 @@ def test_on_time_delivery_is_measured_from_actual_deliveries(
     # Marked delivered, but the goods are still on a lorry and already late.
     bad = make_sales_order(session, customer, fabric, number="SO-BAD",
                            quantity=D("100"), promised_in=-8)
-    bad.lines[0].shipped_quantity = D("100")
-    bad.status = SalesOrderStatus.DELIVERED
-    bad.closed_at = moment(-9)          # closed *before* the goods went out
     bad_shipment = shipments.create_shipment(
         session, number="SHP-BAD", customer_id=customer.id,
         lines=[(bad.lines[0].id, D("100"), M)],
     )
+    bad.lines[0].shipped_quantity = D("100")
+    bad.status = SalesOrderStatus.DELIVERED
+    bad.closed_at = moment(-9)          # closed *before* the goods went out
     bad_shipment.status = ShipmentStatus.IN_TRANSIT
     bad_shipment.dispatch_date = day(-5)
     bad_shipment.expected_delivery_date = day(-2)
