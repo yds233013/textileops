@@ -372,6 +372,14 @@ def propagate(
             )
             replacement_code = replacement.code
 
+    # A rejection moves the batch out of COMPLETED, which changes what the
+    # order line has actually been given. Nothing recomputed it: the only
+    # caller of `_propagate_produced_quantity` was `complete_batch`, so the
+    # line went on claiming cloth that had since been scrapped, and only
+    # self-corrected if some *other* batch on the line later completed.
+    if batch is not None and batch.sales_order_line_id:
+        production.propagate_produced_quantity(session, batch)
+
     affected = _affected_order_numbers(session, batch)
     session.flush()
     return QCPropagation(

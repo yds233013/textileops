@@ -49,6 +49,8 @@ class ShipmentOut(BaseModel):
     expected_delivery_date: dt.date | None
     actual_delivery_date: dt.date | None
     days_late: int
+    #: True when the arrival itself was late, as opposed to still missing.
+    delivered_late: bool
     lines: list[ShipmentLineOut]
     notes: str | None
 
@@ -56,12 +58,15 @@ class ShipmentOut(BaseModel):
 def _shipment_out(session: DbSession, shipment: Shipment) -> ShipmentOut:
     today = clock.today()
     days_late = 0
-    if (
-        shipment.expected_delivery_date
-        and shipment.actual_delivery_date is None
-        and shipment.expected_delivery_date < today
-    ):
-        days_late = (today - shipment.expected_delivery_date).days
+    if shipment.expected_delivery_date:
+        # Measured against the arrival if there is one, and against today if
+        # there is not. This used to require `actual_delivery_date is None`,
+        # so the only shipments that could ever be marked late were ones that
+        # had not arrived: a delivery twelve days past its expected date read
+        # as 0 — identical, on screen, to one that arrived on time.
+        reference = shipment.actual_delivery_date or today
+        if reference > shipment.expected_delivery_date:
+            days_late = (reference - shipment.expected_delivery_date).days
     numbers: dict[uuid.UUID, str] = {}
     if shipment.lines:
         rows = session.execute(
@@ -84,6 +89,9 @@ def _shipment_out(session: DbSession, shipment: Shipment) -> ShipmentOut:
         expected_delivery_date=shipment.expected_delivery_date,
         actual_delivery_date=shipment.actual_delivery_date,
         days_late=days_late,
+        delivered_late=bool(
+            shipment.actual_delivery_date is not None and days_late > 0
+        ),
         notes=shipment.notes,
         lines=[
             ShipmentLineOut(

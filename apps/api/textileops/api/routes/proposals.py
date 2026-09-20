@@ -203,6 +203,10 @@ class DecisionResponse(BaseModel):
     proposal: ProposalOut
     execution: ExecutionOut | None
     message: str
+    #: "ok" | "failed" | "awaiting_external". The client used to have only
+    #: `message` to go on and rendered every 200 in success green — including
+    #: "Approved, but execution failed: …", which an operator reads as done.
+    outcome: str = "ok"
 
 
 @router.post("/{proposal_id}/approve", response_model=DecisionResponse)
@@ -224,9 +228,11 @@ def approve(
     )
     session.commit()
     out = _out(proposal)
+    outcome = "ok"
     if execution is None:
         message = "Approved."
     elif execution.status.value == "awaiting_external":
+        outcome = "awaiting_external"
         message = (
             "Approved and recorded. The draft is ready to copy — TextileOps has not sent "
             "anything, because no channel is connected."
@@ -234,11 +240,13 @@ def approve(
     elif execution.status.value == "succeeded":
         message = "Approved and carried out."
     else:
+        outcome = "failed"
         message = f"Approved, but execution failed: {execution.error}"
     return DecisionResponse(
         proposal=out,
         execution=out.executions[-1] if out.executions else None,
         message=message,
+        outcome=outcome,
     )
 
 

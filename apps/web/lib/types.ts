@@ -105,6 +105,8 @@ export interface OrderSummary {
   risk: RiskLevel;
   estimated_completion: string | null;
   days_ahead: number | null;
+  /** Why there is no estimated completion. null means the order is finished. */
+  completion_unknown_reason: string | null;
   material_readiness: string;
   production_status: string;
   qc_status: string;
@@ -444,6 +446,8 @@ export interface Shipment {
   expected_delivery_date: string | null;
   actual_delivery_date: string | null;
   days_late: number;
+  /** True when the goods arrived late, as opposed to not having arrived yet. */
+  delivered_late: boolean;
   notes: string | null;
   lines: {
     id: string;

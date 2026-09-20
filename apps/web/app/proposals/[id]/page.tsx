@@ -29,7 +29,7 @@ export default function ProposalDetailPage() {
   const [subject, setSubject] = useState("");
   const [note, setNote] = useState("");
   const [confirming, setConfirming] = useState<"approve" | "reject" | null>(null);
-  const [outcome, setOutcome] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<{ text: string; kind: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -48,10 +48,14 @@ export default function ProposalDetailPage() {
     if (decision === "approve" && data?.draft_body && body !== data.draft_body) {
       await apiFetch(`/proposals/${id}/draft`, { method: "PATCH", body: { body, subject } });
     }
-    const result = await apiFetch<{ message?: string }>(`/proposals/${id}/${decision}`, {
-      body: { note },
+    const result = await apiFetch<{ message?: string; outcome?: string }>(
+      `/proposals/${id}/${decision}`,
+      { body: { note } },
+    );
+    setOutcome({
+      text: result.message ?? "Recorded.",
+      kind: result.outcome ?? "ok",
     });
-    setOutcome(result.message ?? "Recorded.");
     setConfirming(null);
     setNote("");
     reload();
@@ -102,9 +106,23 @@ export default function ProposalDetailPage() {
         )}
       </div>
 
+      {/* The request succeeding is not the same as the action succeeding.
+          "Approved, but execution failed: …" came back as HTTP 200 and was
+          rendered in the same success green as "Approved and carried out" —
+          so an operator whose ETA revision had failed to apply saw green and
+          moved on. The banner now takes its colour from what happened. */}
       {outcome && (
-        <p className="mb-4 rounded border border-good-border bg-good-bg px-3 py-2 text-sm text-good-text">
-          {outcome}
+        <p
+          role={outcome.kind === "failed" ? "alert" : "status"}
+          className={
+            outcome.kind === "failed"
+              ? "mb-4 rounded border border-critical-border bg-critical-bg px-3 py-2 text-sm text-critical-text"
+              : outcome.kind === "awaiting_external"
+                ? "mb-4 rounded border border-medium-border bg-medium-bg px-3 py-2 text-sm text-medium-text"
+                : "mb-4 rounded border border-good-border bg-good-bg px-3 py-2 text-sm text-good-text"
+          }
+        >
+          {outcome.text}
         </p>
       )}
       {decide.error && (

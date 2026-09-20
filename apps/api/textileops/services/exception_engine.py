@@ -1169,6 +1169,11 @@ def run(session: Session, *, request_id: str | None = None) -> EngineResult:
                 continue
             existing.status = ExceptionStatus.OPEN
             existing.dismissed_at = None
+            # Whoever closed it no longer closed it. The HTTP route already
+            # clears this on reopen; these two paths did not, so an
+            # engine-reopened exception came back as `status: open` still
+            # naming the person who had dismissed it.
+            existing.resolved_by_user_id = None
             existing.occurrence_count += 1
             existing.resolution_note = (
                 "Reopened: the condition got worse after it was dismissed."
@@ -1179,6 +1184,7 @@ def run(session: Session, *, request_id: str | None = None) -> EngineResult:
             existing.status = ExceptionStatus.OPEN
             existing.resolved_at = None
             existing.auto_resolved = False
+            existing.resolved_by_user_id = None
             existing.occurrence_count += 1
 
         if existing is None:

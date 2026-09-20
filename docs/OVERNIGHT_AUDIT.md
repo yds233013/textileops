@@ -667,3 +667,50 @@ Also corrected: `partially_inspected` is now tested *before* conditional pass.
 One batch passed with a note and two never looked at is not "conditionally
 passed" — the looking is not finished.
 
+### Truthfulness — what the screens claimed (Reviewer D)
+
+- **D1 (high)** — `completion_unknown_reason` was computed, carried a comment
+  about the three cases it exists to separate, and **was never exposed by the
+  API**. So the order page still branched on `days_ahead === null` alone and
+  printed one sentence for all three. A fully shipped order therefore read
+  **"Estimated completion: No achievable date — nothing in stock and nothing
+  planned"**: a completed job presented as an impossible one. Now exposed and
+  used, with three distinct answers — and "no achievable date" is gone
+  entirely, because the system only knows it has not worked one out.
+- **D2 (high)** — `"Approved, but execution failed: …"` came back as HTTP 200
+  and was rendered in the same success green as "Approved and carried out".
+  The request succeeding is not the action succeeding. The response now
+  carries an `outcome`, and the banner takes its colour from it. (Found while
+  fixing it: the amber class I first reached for used a `warn-*` token that
+  does not exist in the palette — Tailwind would have rendered no background
+  at all and TypeScript would not have noticed.)
+- **D3 (medium-high)** — the Evidence card's subtitle read *"Every figure here
+  came from our own records, not from a model"*, above a list that includes
+  `MESSAGE` items whose detail is a supplier's prose verbatim — the very text
+  the system fences before it reaches a model. A blanket assurance over a
+  mixed list erases the distinction invariant 8 exists to hold. Each item now
+  says where it came from, and third-party text is marked and set apart.
+- **D4 (medium)** — the shipments "Late by" column computed lateness **only
+  when the shipment had not arrived**, so a delivery twelve days past its
+  expected date showed the same "—" as one that arrived on time. The only
+  shipments that could ever be marked late were ones still in transit. Now
+  measured against the arrival when there is one, and "late" and "overdue"
+  read differently.
+- **D5a (medium)** — dispatch credits what actually left and writes the
+  shortfall into the shipment's notes; that field was rendered on **no page**,
+  so a dispatch that sent 600 of a packed 1,000 m read as 1,000 m gone.
+- **D5b (high)** — `propagate_produced_quantity` was called only from
+  `complete_batch`, so a QC rejection that scrapped the cloth never took back
+  the credit. The order line went on claiming production that had been
+  destroyed, self-correcting only if some *other* batch later completed.
+- **Bonus (medium)** — the exception engine's two reopen paths cleared
+  `dismissed_at`/`resolved_at` but not `resolved_by_user_id`, so an
+  engine-reopened exception came back `status: open` still naming the person
+  who had closed it. The HTTP route already did this correctly.
+
+11 frontend tests added for the wording and colour decisions, as pure
+functions — the rule stated once is harder to regress than one buried in JSX.
+Reviewer D's structural point stands and is recorded under remaining risks:
+none of the 27 page components has a render test, which is why all of D1–D5
+lived in untested paths.
+

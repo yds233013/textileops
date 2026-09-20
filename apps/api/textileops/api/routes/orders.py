@@ -58,6 +58,10 @@ class OrderSummaryOut(BaseModel):
     risk: str
     estimated_completion: dt.date | None
     days_ahead: int | None
+    #: Why there is no estimated completion, when there is none. None means
+    #: the order is finished — which is a very different thing from "nothing
+    #: is planned", and the screen was showing the same sentence for both.
+    completion_unknown_reason: str | None
     material_readiness: str
     production_status: str
     qc_status: str
@@ -94,6 +98,7 @@ def _summary(assessment: order_service.OrderAssessment, exception_count: int) ->
         risk=assessment.risk.value,
         estimated_completion=assessment.estimated_completion,
         days_ahead=assessment.days_ahead,
+        completion_unknown_reason=assessment.completion_unknown_reason,
         material_readiness=assessment.material_readiness,
         production_status=assessment.production_status,
         qc_status=assessment.qc_status,

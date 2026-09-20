@@ -92,7 +92,10 @@ export default function ShipmentsPage() {
                 </Td>
                 <Td numeric>
                   {shipment.days_late > 0 ? (
-                    <Badge tone="bad">{shipment.days_late} days</Badge>
+                    <Badge tone="bad">
+                      {shipment.days_late} days
+                      {shipment.delivered_late ? " late" : " overdue"}
+                    </Badge>
                   ) : (
                     "—"
                   )}
@@ -103,6 +106,17 @@ export default function ShipmentsPage() {
                       {line.sales_order_number}: {quantity(line.quantity, line.unit)}
                     </span>
                   ))}
+                  {/* This column shows the *packed* quantity. When dispatch
+                      cannot find that much finished cloth it credits only
+                      what actually left and writes the difference into the
+                      shipment's notes — which were rendered on no page at
+                      all, so a dispatch that sent 600 of a packed 1,000 m
+                      read here as 1,000 m gone. */}
+                  {shipment.notes && shipment.notes.toLowerCase().includes("short") && (
+                    <span className="mt-0.5 block text-critical-text">
+                      {shipment.notes}
+                    </span>
+                  )}
                 </Td>
                 <Td>
                   {["planned", "packed"].includes(shipment.status) && (

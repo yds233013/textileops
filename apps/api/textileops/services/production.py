@@ -571,7 +571,7 @@ def complete_batch(
     batch.actual_completion = completed_at
     batch.estimated_completion = batch.actual_completion.date()
     inventory.release_reservations(session, production_batch_id=batch.id)
-    _propagate_produced_quantity(session, batch)
+    propagate_produced_quantity(session, batch)
 
     if consumption.issued:
         add_event(
@@ -610,7 +610,7 @@ def complete_batch(
     return batch
 
 
-def _propagate_produced_quantity(session: Session, batch: ProductionBatch) -> None:
+def propagate_produced_quantity(session: Session, batch: ProductionBatch) -> None:
     """Recompute the line's produced quantity from its batches.
 
     Derived rather than accumulated: a batch can legitimately be completed more

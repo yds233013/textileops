@@ -57,18 +57,33 @@ export default function OrderDetailPage() {
                 hint: dueText(data.promised_date),
               },
               {
+                // Three different situations used to share one sentence:
+                // an order with nothing planned, an order whose materials are
+                // not covered, and an order that is simply *finished*. The
+                // last one is the worst — a fully shipped order read as
+                // "No achievable date · Nothing in stock and nothing planned",
+                // which is a completed job presented as an impossible one.
+                // The backend distinguishes them; it just was not asked.
                 term: "Estimated completion",
                 value: data.estimated_completion ? (
                   date(data.estimated_completion)
+                ) : data.completion_unknown_reason === null ? (
+                  <span className="text-ink-500">Nothing left to make</span>
                 ) : (
-                  <span className="text-ink-500">No achievable date</span>
+                  <span className="text-ink-500">No date yet</span>
                 ),
                 hint:
-                  data.days_ahead === null
-                    ? "Nothing in stock and nothing planned for the outstanding quantity."
-                    : data.days_ahead >= 0
-                      ? `${data.days_ahead} days of buffer`
-                      : `${Math.abs(data.days_ahead)} days beyond the promise`,
+                  data.estimated_completion !== null
+                    ? data.days_ahead === null
+                      ? undefined
+                      : data.days_ahead >= 0
+                        ? `${data.days_ahead} days of buffer`
+                        : `${Math.abs(data.days_ahead)} days beyond the promise`
+                    : data.completion_unknown_reason === null
+                      ? "Everything on this order has been produced or shipped."
+                      : data.completion_unknown_reason === "materials_not_covered"
+                        ? "Production is planned, but its materials are not covered, so no completion date can be worked out yet."
+                        : "Nothing is planned for the outstanding quantity.",
               },
               { term: "Material readiness", value: <StatusPill value={data.material_readiness} /> },
               { term: "Production", value: <StatusPill value={data.production_status} /> },

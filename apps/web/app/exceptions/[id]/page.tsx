@@ -216,6 +216,10 @@ function InvestigationPanel({ investigation }: { investigation: Investigation })
   );
 }
 
+/** Evidence whose text was written by someone outside this business.
+ *  Mirrors UNTRUSTED_EVIDENCE_KINDS in the backend's models/enums.py. */
+const UNTRUSTED_EVIDENCE_KINDS = new Set(["message", "document", "ai_hypothesis"]);
+
 export default function ExceptionDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -305,9 +309,18 @@ export default function ExceptionDetailPage() {
             <ImpactPanel detail={data} />
           </Card>
 
+          {/* The old subtitle was "Every figure here came from our own
+              records, not from a model." That is true of the calculations and
+              flatly untrue of the message and document items, whose detail is
+              a supplier's own prose copied verbatim — the very text the
+              system fences before it goes anywhere near a model. A blanket
+              assurance over a mixed list erases the distinction the whole
+              untrusted-content invariant exists to hold. Each item now says
+              where it came from, and the items that are somebody else's words
+              are marked as such. */}
           <Card
             title="Evidence"
-            subtitle="Every figure here came from our own records, not from a model."
+            subtitle="Calculations and records are ours. Quoted messages and documents are not — they are what a third party wrote."
           >
             {data.evidence.length === 0 ? (
               <EmptyState title="No evidence recorded" />
@@ -318,8 +331,17 @@ export default function ExceptionDetailPage() {
                     <div className="flex flex-wrap items-baseline gap-2">
                       <span className="text-sm font-medium text-ink-900">{item.label}</span>
                       <Badge tone="neutral">{humanise(item.kind)}</Badge>
+                      {UNTRUSTED_EVIDENCE_KINDS.has(item.kind) && (
+                        <Badge tone="warn">Third-party text</Badge>
+                      )}
                     </div>
-                    <p className="mt-0.5 whitespace-pre-wrap text-sm text-ink-700">
+                    <p
+                      className={
+                        UNTRUSTED_EVIDENCE_KINDS.has(item.kind)
+                          ? "mt-0.5 whitespace-pre-wrap border-l-2 border-medium-border pl-2 text-sm italic text-ink-700"
+                          : "mt-0.5 whitespace-pre-wrap text-sm text-ink-700"
+                      }
+                    >
                       {item.detail}
                     </p>
                     {item.data && (
