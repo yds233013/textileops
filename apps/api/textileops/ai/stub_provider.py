@@ -362,7 +362,7 @@ class StubProvider(AIProvider):
         for tool_name, payload in (context.get("tool_data") or {}).items():
             evidence.append(
                 EvidenceRef(
-                    label=f"Tool result: {tool_name}",
+                    label=f"Read-only lookup: {tool_name}",
                     detail=_summarise_payload(payload)[:1000],
                     source=f"tool:{tool_name}",
                 )
@@ -489,11 +489,14 @@ def _summarise(text: str) -> str:
 
 
 def _summarise_payload(payload: Any) -> str:
+    """What a lookup returned, in a phrase. The stub does not read the payload
+    for meaning, so it names what it saw rather than interpreting it."""
     if isinstance(payload, dict):
-        keys = ", ".join(list(payload)[:8])
-        return f"object with fields: {keys}"
+        ident = payload.get("number") or payload.get("code") or payload.get("name")
+        return f"Read the record for {ident}." if ident else "Read one record."
     if isinstance(payload, list):
-        return f"{len(payload)} record(s) returned"
+        count = len(payload)
+        return f"Read {count} record{'' if count == 1 else 's'}."
     return str(payload)[:200]
 
 

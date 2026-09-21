@@ -55,6 +55,8 @@ from textileops.models.sales import SalesOrder
 from textileops.services import clock, coverage, impact, orders, procurement, production, shipments
 from textileops.services.audit import record_audit, record_metric
 from textileops.services.impact import Impact, Metric
+from textileops.services.prose import num, plural, when
+from textileops.services.prose import qty as fmt_qty
 
 logger = get_logger(__name__)
 ZERO = Decimal("0")
@@ -62,7 +64,26 @@ ZERO = Decimal("0")
 
 def _date_text(value: dt.date | dt.datetime | None, fallback: str = "unknown") -> str:
     """Render a date for an operator, saying so plainly when there isn't one."""
-    return value.isoformat() if value is not None else fallback
+    return when(value) if value is not None else fallback
+
+
+#: How a status reads inside a sentence. The codes are for machines.
+_READABLE_STATUS = {
+    "ready": "covered",
+    "partial": "partly covered",
+    "short": "short",
+    "not_applicable": "not needed",
+    "not_started": "not started",
+    "in_progress": "in progress",
+    "not_inspected": "not inspected yet",
+    "partially_inspected": "partly inspected",
+    "not_shipped": "not shipped",
+    "partially_shipped": "part shipped",
+}
+
+
+def _readable(value: str) -> str:
+    return _READABLE_STATUS.get(value, value.replace("_", " "))
 
 
 @dataclass
@@ -157,8 +178,8 @@ def detect_order_risk(session: Session) -> list[Detection]:
             ]
             detection_impact = Impact(
                 headline=(
-                    f"{assessment.customer_name} is {days_late} day(s) past the promised "
-                    f"date with {outstanding} {unit.value} undelivered."
+                    f"{assessment.customer_name} is {plural(days_late, 'day')} past the promised "
+                    f"date with {fmt_qty(outstanding, unit)} undelivered."
                 ),
                 metrics=metrics,
                 affected_orders=[affected],
@@ -171,7 +192,7 @@ def detect_order_risk(session: Session) -> list[Detection]:
                     title=f"{order.number} is late for {assessment.customer_name}",
                     summary=(
                         f"Order {order.number} was promised on "
-                        f"{assessment.promised_date.isoformat()} and {outstanding} "
+                        f"{when(assessment.promised_date)} and {num(outstanding)} "
                         f"{unit.value} is still outstanding."
                     ),
                     entity_type=EntityType.SALES_ORDER,
@@ -210,8 +231,8 @@ def detect_order_risk(session: Session) -> list[Detection]:
                 ).days
                 detail = (
                     f"Earliest completion is "
-                    f"{assessment.estimated_completion.isoformat()}, which is "
-                    f"{shortfall_days} day(s) after the promised date."
+                    f"{when(assessment.estimated_completion)}, which is "
+                    f"{plural(shortfall_days, 'day')} after the promised date."
                 )
             severity = (
                 Severity.CRITICAL
@@ -224,7 +245,7 @@ def detect_order_risk(session: Session) -> list[Detection]:
                 headline=(
                     f"{assessment.customer_name}'s order {order.number} will miss its "
                     f"promised date"
-                    + (f" by {shortfall_days} day(s)." if shortfall_days else ".")
+                    + (f" by {plural(shortfall_days, 'day')}." if shortfall_days else ".")
                 ),
                 metrics=[
                     impact.days_metric("days_short", "Days beyond promise", shortfall_days),
@@ -242,7 +263,7 @@ def detect_order_risk(session: Session) -> list[Detection]:
                     exception_type=ExceptionType.ORDER_AT_RISK,
                     severity=severity,
                     title=f"{order.number} at risk of missing "
-                    f"{assessment.promised_date.isoformat()}",
+                    f"{when(assessment.promised_date)}",
                     summary=detail,
                     entity_type=EntityType.SALES_ORDER,
                     entity_id=order.id,
@@ -280,10 +301,11 @@ def _order_evidence(
             kind=EvidenceKind.CALCULATION,
             label="Order position",
             detail=(
-                f"Promised {assessment.promised_date.isoformat()}; estimated completion "
+                f"Promised {when(assessment.promised_date)}; estimated completion "
                 f"{_date_text(assessment.estimated_completion)}; "
-                f"material readiness {assessment.material_readiness}; "
-                f"production {assessment.production_status}; QC {assessment.qc_status}."
+                f"materials {_readable(assessment.material_readiness)}; "
+                f"production {_readable(assessment.production_status)}; "
+                f"QC {_readable(assessment.qc_status)}."
             ),
             data={
                 "promised_date": assessment.promised_date.isoformat(),
@@ -342,11 +364,11 @@ def detect_material_shortage(session: Session) -> list[Detection]:
         batch_codes = [a.requirement.production_batch_code for a in starved]
         detection_impact = Impact(
             headline=(
-                f"{result.shortage} {result.unit.value} of {result.material_name} short "
-                f"for {len(batch_codes)} batch(es) from {first_needed.isoformat()}."
+                f"{fmt_qty(result.shortage, result.unit)} of {result.material_name} short "
+                f"for {plural(len(batch_codes), 'batch', 'batches')} from {when(first_needed)}."
                 if hard_short
                 else f"{result.material_name} arrives after it is needed for "
-                f"{len(batch_codes)} batch(es)."
+                f"{plural(len(batch_codes), 'batch', 'batches')}."
             ),
             metrics=[
                 impact.quantity_metric(
@@ -380,10 +402,9 @@ def detect_material_shortage(session: Session) -> list[Detection]:
                 kind=EvidenceKind.CALCULATION,
                 label="Coverage calculation",
                 detail=(
-                    f"On site and drawable {result.available} {result.unit.value} + "
-                    f"incoming {result.incoming} − required {result.required} = "
-                    f"{result.available + result.incoming - result.required} "
-                    f"{result.unit.value}."
+                    f"On site and drawable {fmt_qty(result.available, result.unit)} + "
+                    f"incoming {num(result.incoming)} − required {num(result.required)} = "
+                    f"{fmt_qty(result.available + result.incoming - result.required, result.unit)}."
                 ),
                 data={
                     "available": str(result.available),
@@ -403,8 +424,8 @@ def detect_material_shortage(session: Session) -> list[Detection]:
                     kind=EvidenceKind.RECORD,
                     label=f"Incoming: {line.purchase_order_number}",
                     detail=(
-                        f"{line.quantity} {line.unit.value} from {line.supplier_name} "
-                        f"expected {line.expected_date.isoformat()}"
+                        f"{fmt_qty(line.quantity, line.unit)} from {line.supplier_name} "
+                        f"expected {when(line.expected_date)}"
                         + (" (revised)" if line.is_revised else "")
                     ),
                     entity_type=EntityType.PURCHASE_ORDER,
@@ -417,13 +438,13 @@ def detect_material_shortage(session: Session) -> list[Detection]:
                     kind=EvidenceKind.RECORD,
                     label=f"Demand: {allocation.requirement.production_batch_code}",
                     detail=(
-                        f"Needs {allocation.requirement.quantity} "
+                        f"Needs {num(allocation.requirement.quantity)} "
                         f"{allocation.requirement.unit.value} by "
-                        f"{allocation.requirement.required_by.isoformat()}; short by "
-                        f"{allocation.shortfall_quantity}"
+                        f"{when(allocation.requirement.required_by)}; short by "
+                        f"{num(allocation.shortfall_quantity)}"
                         + (
                             f"; covering stock only lands "
-                            f"{allocation.covered_by_date.isoformat()}"
+                            f"{when(allocation.covered_by_date)}"
                             if allocation.is_late and allocation.covered_by_date
                             else ""
                         )
@@ -440,12 +461,11 @@ def detect_material_shortage(session: Session) -> list[Detection]:
                 severity=severity,
                 title=f"{result.material_name} short for production",
                 summary=(
-                    f"{result.material_code} is short by {result.shortage} "
-                    f"{result.unit.value} against demand due from "
-                    f"{first_needed.isoformat()}."
+                    f"Short by {fmt_qty(result.shortage, result.unit)} against demand due "
+                    f"from {when(first_needed)}."
                     if hard_short
-                    else f"{result.material_code} is covered only by stock arriving after "
-                    f"it is needed ({first_needed.isoformat()})."
+                    else "Covered only by stock that arrives after it is needed "
+                    f"({when(first_needed)})."
                 ),
                 entity_type=EntityType.MATERIAL,
                 entity_id=result.material_id,
@@ -491,12 +511,12 @@ def detect_po_issues(session: Session) -> list[Detection]:
             else Severity.MEDIUM
         )
         outstanding_text = ", ".join(
-            f"{qty} {unit.value} of {code}"
-            for code, (qty, unit) in status.outstanding_by_material.items()
+            f"{fmt_qty(amount, unit)} of {code}"
+            for code, (amount, unit) in status.outstanding_by_material.items()
         )
         detection_impact = Impact(
             headline=(
-                f"{po.supplier.name} is {status.days_late} day(s) late on {po.number} "
+                f"{po.supplier.name} is {plural(status.days_late, 'day')} late on {po.number} "
                 f"({outstanding_text})."
             ),
             metrics=[
@@ -517,7 +537,7 @@ def detect_po_issues(session: Session) -> list[Detection]:
                 severity=severity,
                 title=f"{po.number} overdue from {po.supplier.name}",
                 summary=(
-                    f"Expected {po.current_expected_date.isoformat()}; still outstanding: "
+                    f"Expected {when(po.current_expected_date)}; still outstanding: "
                     f"{outstanding_text}."
                 ),
                 entity_type=EntityType.PURCHASE_ORDER,
@@ -552,8 +572,8 @@ def detect_po_issues(session: Session) -> list[Detection]:
         )
         detection_impact = Impact(
             headline=(
-                f"{po.supplier.name} moved {po.number} out by {delay_days} day(s), to "
-                f"{po.revised_expected_date.isoformat()}."
+                f"{po.supplier.name} moved {po.number} out by {plural(delay_days, 'day')}, to "
+                f"{when(po.revised_expected_date)}."
             ),
             metrics=[
                 impact.days_metric("delay_days", "Days pushed out", delay_days),
@@ -567,15 +587,15 @@ def detect_po_issues(session: Session) -> list[Detection]:
                 dedupe_key=f"{ExceptionType.SUPPLIER_DELAY.value}:{po.id}",
                 exception_type=ExceptionType.SUPPLIER_DELAY,
                 severity=severity,
-                title=f"{po.supplier.name} delayed {po.number} by {delay_days} day(s)",
+                title=f"{po.supplier.name} delayed {po.number} by {plural(delay_days, 'day')}",
                 # Deliberately no quoted reason. This summary is rendered into
                 # the investigator's brief under "what the deterministic engine
                 # found" — outside the untrusted fence — so a supplier's prose
                 # here arrives dressed as our own conclusion, forged delimiters
                 # and all. The words themselves are kept, as fenced evidence.
                 summary=(
-                    f"Original date {po.expected_date.isoformat()}, now "
-                    f"{po.revised_expected_date.isoformat()}."
+                    f"Original date {when(po.expected_date)}, now "
+                    f"{when(po.revised_expected_date)}."
                     + (" A reason was given; see the evidence." if po.eta_note else "")
                 ),
                 entity_type=EntityType.PURCHASE_ORDER,
@@ -629,8 +649,8 @@ def detect_po_issues(session: Session) -> list[Detection]:
                     severity=Severity.MEDIUM,
                     title=f"Over-receipt on {po.number} line {line.line_no}",
                     summary=(
-                        f"Ordered {line.ordered_quantity} {line.unit.value} of "
-                        f"{line.material.code}; received {line.received_quantity}."
+                        f"Ordered {fmt_qty(line.ordered_quantity, line.unit)} of "
+                        f"{line.material.code}; received {num(line.received_quantity)}."
                     ),
                     entity_type=EntityType.PURCHASE_ORDER_LINE,
                     entity_id=line.id,
@@ -644,8 +664,8 @@ def detect_po_issues(session: Session) -> list[Detection]:
                             kind=EvidenceKind.CALCULATION,
                             label="Quantity comparison",
                             detail=(
-                                f"Ordered {line.ordered_quantity} {line.unit.value}; "
-                                f"accepted receipts total {line.received_quantity} "
+                                f"Ordered {fmt_qty(line.ordered_quantity, line.unit)}; "
+                                f"accepted receipts total {num(line.received_quantity)} "
                                 f"{line.unit.value}."
                             ),
                             data={
@@ -678,8 +698,8 @@ def _po_evidence(session: Session, po: PurchaseOrder, *, days_late: int) -> list
             label="Purchase order",
             detail=(
                 f"{po.number} to {po.supplier.name}, ordered "
-                f"{po.order_date.isoformat()}, originally expected "
-                f"{po.expected_date.isoformat()}."
+                f"{when(po.order_date)}, originally expected "
+                f"{when(po.expected_date)}."
             ),
             entity_type=EntityType.PURCHASE_ORDER,
             entity_id=po.id,
@@ -705,8 +725,8 @@ def _po_evidence(session: Session, po: PurchaseOrder, *, days_late: int) -> list
                 kind=EvidenceKind.CALCULATION,
                 label=f"Line {line.line_no}: {line.material.code}",
                 detail=(
-                    f"Ordered {line.ordered_quantity} {line.unit.value}, received "
-                    f"{line.received_quantity}, outstanding {line.outstanding_quantity}."
+                    f"Ordered {fmt_qty(line.ordered_quantity, line.unit)}, received "
+                    f"{num(line.received_quantity)}, outstanding {num(line.outstanding_quantity)}."
                 ),
                 data={
                     "ordered": str(line.ordered_quantity),
@@ -724,7 +744,7 @@ def _po_evidence(session: Session, po: PurchaseOrder, *, days_late: int) -> list
             items.append(
                 EvidenceItem(
                     kind=EvidenceKind.MESSAGE,
-                    label=f"Supplier message of {message.received_at.date().isoformat()}",
+                    label=f"Supplier message of {when(message.received_at.date())}",
                     detail=message.body[:500],
                     message_id=message.id,
                     entity_type=EntityType.MESSAGE,
@@ -767,7 +787,7 @@ def detect_production_delay(session: Session) -> list[Detection]:
         )
         detection_impact = Impact(
             headline=(
-                f"{batch.code} is running {delay.delay_days} day(s) late"
+                f"{batch.code} is running {plural(delay.delay_days, 'day')} late"
                 if delay.delay_days
                 else f"{batch.code} has no achievable completion date"
             ),
@@ -788,7 +808,7 @@ def detect_production_delay(session: Session) -> list[Detection]:
                 severity=severity,
                 title=f"Batch {batch.code} behind schedule",
                 summary=(
-                    f"Planned completion {batch.planned_completion.isoformat()}; "
+                    f"Planned completion {when(batch.planned_completion)}; "
                     f"current estimate {_date_text(batch.estimated_completion)}. "
                     f"{delay.reason}"
                 ),
@@ -804,8 +824,8 @@ def detect_production_delay(session: Session) -> list[Detection]:
                         kind=EvidenceKind.CALCULATION,
                         label="Schedule",
                         detail=(
-                            f"Planned {batch.planned_start.isoformat()} → "
-                            f"{batch.planned_completion.isoformat()}; status "
+                            f"Planned {when(batch.planned_start)} → "
+                            f"{when(batch.planned_completion)}; status "
                             f"{batch.status.value}; estimate "
                             f"{_date_text(batch.estimated_completion, 'none')}."
                         ),
@@ -885,7 +905,7 @@ def detect_qc_failures(session: Session) -> list[Detection]:
 
         detection_impact = Impact(
             headline=(
-                f"{inspection.rejected_quantity} {inspection.unit.value} failed QC"
+                f"{fmt_qty(inspection.rejected_quantity, inspection.unit)} failed QC"
                 + (f" on {batch.code}" if batch else "")
                 + "."
             ),
@@ -918,8 +938,8 @@ def detect_qc_failures(session: Session) -> list[Detection]:
                 ),
                 summary=(
                     f"Inspection {inspection.code} on "
-                    f"{inspection.inspected_at.date().isoformat()} rejected "
-                    f"{inspection.rejected_quantity} {inspection.unit.value}. {detail}"
+                    f"{when(inspection.inspected_at.date())} rejected "
+                    f"{fmt_qty(inspection.rejected_quantity, inspection.unit)}. {detail}"
                 ),
                 entity_type=EntityType.QC_INSPECTION,
                 entity_id=inspection.id,
@@ -949,7 +969,7 @@ def detect_qc_failures(session: Session) -> list[Detection]:
                             label=f"Batch {batch.code}",
                             detail=(
                                 f"Status {batch.status.value}; output "
-                                f"{batch.output_quantity} {batch.unit.value}; estimate "
+                                f"{fmt_qty(batch.output_quantity, batch.unit)}; estimate "
                                 f"{_date_text(batch.estimated_completion)}."
                             ),
                             entity_type=EntityType.PRODUCTION_BATCH,
@@ -990,7 +1010,7 @@ def detect_shipment_delay(session: Session) -> list[Detection]:
         detection_impact = Impact(
             headline=(
                 f"Shipment {shipment.number} to {shipment.customer.name} is "
-                f"{days_late} day(s) past its expected delivery date."
+                f"{plural(days_late, 'day')} past its expected delivery date."
             ),
             metrics=[impact.days_metric("days_late", "Days overdue", days_late)],
             affected_orders=affected,
@@ -1003,7 +1023,7 @@ def detect_shipment_delay(session: Session) -> list[Detection]:
                 title=f"Shipment {shipment.number} overdue",
                 summary=(
                     f"Dispatched {_date_text(shipment.dispatch_date)}, "
-                    f"expected {shipment.expected_delivery_date.isoformat()}, not yet "
+                    f"expected {when(shipment.expected_delivery_date)}, not yet "
                     f"confirmed delivered."
                 ),
                 entity_type=EntityType.SHIPMENT,
@@ -1225,7 +1245,7 @@ def run(session: Session, *, request_id: str | None = None) -> EngineResult:
                 action="exception.detected",
                 entity_type=EntityType.EXCEPTION,
                 entity_id=exception.id,
-                summary=f"{exception.code} {exception.exception_type.value}: {exception.title}",
+                summary=f"{exception.code} raised: {exception.title}",
                 actor_type="system",
                 actor_label="exception-engine",
                 request_id=request_id,

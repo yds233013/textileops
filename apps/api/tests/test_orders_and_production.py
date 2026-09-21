@@ -430,3 +430,48 @@ def test_dispatch_credits_only_what_actually_left(session, customer, fabric):
     assert line.outstanding_quantity == D("200.000")
     assert order.status != SalesOrderStatus.SHIPPED
     assert "short" in (shipment.notes or "")
+
+
+def test_the_next_blocker_is_named_only_from_facts_on_the_assessment():
+    """An order list shows one line of "what is in the way". It must never
+    invent a cause, and must say nothing — not something reassuring — when
+    nothing is in the way."""
+    import datetime as dt
+    import uuid
+
+    from textileops.models.enums import RiskLevel, SalesOrderStatus
+    from textileops.services.orders import MaterialReadiness, OrderAssessment, next_blocker
+
+    def order(**overrides):
+        base = {
+            "order_id": uuid.uuid4(),
+            "number": "SO-1",
+            "customer_id": uuid.uuid4(),
+            "customer_name": "C",
+            "status": SalesOrderStatus.IN_PRODUCTION,
+            "order_date": dt.date(2026, 9, 1),
+            "promised_date": dt.date(2026, 10, 1),
+            "currency": "INR",
+            "risk": RiskLevel.ON_TRACK,
+            "estimated_completion": dt.date(2026, 9, 20),
+            "completion_unknown_reason": None,
+            "days_ahead": 11,
+            "material_readiness": MaterialReadiness.READY,
+            "production_status": "in_progress",
+            "qc_status": "not_inspected",
+            "shipment_status": "not_shipped",
+        }
+        base.update(overrides)
+        return OrderAssessment(**base)
+
+    assert next_blocker(order()) is None
+    assert next_blocker(order(status=SalesOrderStatus.DELIVERED, risk=RiskLevel.LATE)) is None
+    assert "blocked" in next_blocker(order(blocked_reasons=["B-1: loom down"])).lower()
+    assert "QC" in next_blocker(order(qc_status="rejected"))
+    assert "short" in next_blocker(order(material_readiness=MaterialReadiness.SHORT)).lower()
+    assert "passed" in next_blocker(order(risk=RiskLevel.LATE))
+    assert "3 days after" in next_blocker(order(days_ahead=-3, risk=RiskLevel.AT_RISK))
+    # A stopped batch outranks a late material: it is the thing to fix first.
+    assert "blocked" in next_blocker(
+        order(blocked_reasons=["B-1: loom down"], material_readiness=MaterialReadiness.PARTIAL)
+    ).lower()

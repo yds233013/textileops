@@ -37,7 +37,7 @@ from textileops.models.procurement import (
     PurchaseOrderReceipt,
     PurchaseOrderReceiptCorrection,
 )
-from textileops.services import clock, inventory
+from textileops.services import clock, inventory, prose
 from textileops.services.audit import record_audit
 
 ZERO = Decimal("0")
@@ -229,9 +229,10 @@ def receive(
         entity_type=EntityType.PURCHASE_ORDER_LINE,
         entity_id=line.id,
         summary=(
-            f"Received {accepted} {line.unit.value} against {line.purchase_order.number} "
-            f"line {line.line_no} "
-            f"({line.received_quantity}/{line.ordered_quantity} {line.unit.value} to date)."
+            f"Received {prose.qty(accepted, line.unit)} against "
+            f"{line.purchase_order.number} line {line.line_no} "
+            f"({prose.num(line.received_quantity)} of "
+            f"{prose.qty(line.ordered_quantity, line.unit)} to date)."
         ),
         actor_type="user" if user_id else "system",
         actor_user_id=user_id,
@@ -617,12 +618,13 @@ def correct_receipt(
         entity_type=EntityType.PURCHASE_ORDER_LINE,
         entity_id=line.id,
         summary=(
-            f"Receipt corrected down by {accepted_drop} {receipt.unit.value} "
+            f"Receipt corrected down by {prose.qty(accepted_drop, receipt.unit)} "
             f"accepted"
             + (f" and {rejected_drop} rejected" if rejected_drop > ZERO else "")
             + f" against {line.purchase_order.number} line {line.line_no} "
-            f"({line.received_quantity}/{line.ordered_quantity} "
-            f"{line.unit.value} now recorded). Reason: {reason.strip()[:200]}"
+            f"({prose.num(line.received_quantity)} of "
+            f"{prose.qty(line.ordered_quantity, line.unit)} now recorded). "
+            f"Reason: {reason.strip()[:200]}"
         ),
         actor_type="user" if user_id else "system",
         actor_user_id=user_id,

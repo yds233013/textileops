@@ -47,6 +47,16 @@ class OrderLineOut(BaseModel):
     batch_ids: list[uuid.UUID]
 
 
+class OrderItemOut(BaseModel):
+    """One line, reduced to what a list row can show."""
+
+    fabric_code: str
+    fabric_name: str
+    quantity: Decimal
+    outstanding_quantity: Decimal
+    unit: str
+
+
 class OrderSummaryOut(BaseModel):
     id: uuid.UUID
     number: str
@@ -70,6 +80,10 @@ class OrderSummaryOut(BaseModel):
     value_basis: str
     currency: str
     open_exception_count: int
+    items: list[OrderItemOut] = []
+    #: The first thing in the way, in words, or None when nothing the system can
+    #: name is. See `orders.next_blocker`.
+    next_blocker: str | None = None
 
 
 class OrderDetailOut(OrderSummaryOut):
@@ -107,6 +121,17 @@ def _summary(assessment: order_service.OrderAssessment, exception_count: int) ->
         value_basis=assessment.value_basis,
         currency=assessment.currency,
         open_exception_count=exception_count,
+        items=[
+            OrderItemOut(
+                fabric_code=line.fabric_code,
+                fabric_name=line.fabric_name,
+                quantity=line.quantity,
+                outstanding_quantity=line.outstanding_quantity,
+                unit=line.unit.value,
+            )
+            for line in assessment.lines
+        ],
+        next_blocker=order_service.next_blocker(assessment),
     )
 
 

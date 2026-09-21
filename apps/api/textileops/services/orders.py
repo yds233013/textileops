@@ -19,6 +19,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -38,7 +39,7 @@ from textileops.models.logistics import Shipment, ShipmentLine
 from textileops.models.production import ProductionBatch
 from textileops.models.quality import QCInspection
 from textileops.models.sales import SalesOrder, SalesOrderLine
-from textileops.services import clock
+from textileops.services import clock, prose
 from textileops.services.inventory import fabric_available_bulk
 
 ZERO = Decimal("0")
@@ -223,6 +224,7 @@ def assess_order(
     finished_goods: dict[uuid.UUID, Decimal] | None = None,
     batches: dict[uuid.UUID, list[ProductionBatch]] | None = None,
     shipments: dict[uuid.UUID, list[Shipment]] | None = None,
+    coverage_cache: dict[uuid.UUID, Any] | None = None,
 ) -> OrderAssessment:
     if not isinstance(order, SalesOrder):
         found = session.get(SalesOrder, order)
@@ -341,7 +343,7 @@ def assess_order(
         estimated_completion=estimated_completion,
         completion_unknown_reason=completion_unknown_reason,
         days_ahead=days_ahead,
-        material_readiness=_material_readiness(session, lines),
+        material_readiness=_material_readiness(session, lines, coverage_cache),
         production_status=_production_status(batch_statuses),
         qc_status=_qc_status(
             qc_outcomes,
@@ -417,8 +419,20 @@ def _risk_level(
     return RiskLevel.ON_TRACK
 
 
-def _material_readiness(session: Session, lines: list[LineAssessment]) -> str:
-    """Are the materials for this order's open batches covered?"""
+def _material_readiness(
+    session: Session,
+    lines: list[LineAssessment],
+    coverage_cache: dict[uuid.UUID, Any] | None = None,
+) -> str:
+    """Are the materials for this order's open batches covered?
+
+    ``coverage_cache`` lets a caller assessing many orders at once compute each
+    material's coverage a single time. Coverage is a property of the whole
+    material — every batch's demand against every lot and every inbound line —
+    so it does not depend on which order is asking. Recomputing it per order
+    made the order list issue ~260 queries for eight orders and take three
+    seconds on the demo dataset.
+    """
     from textileops.services.coverage import analyse_material
 
     batch_ids = [bid for line in lines for bid in line.batch_ids]
@@ -443,7 +457,12 @@ def _material_readiness(session: Session, lines: list[LineAssessment]) -> str:
     short = False
     partial = False
     for material_id in material_ids:
-        coverage = analyse_material(session, material_id)
+        if coverage_cache is not None and material_id in coverage_cache:
+            coverage = coverage_cache[material_id]
+        else:
+            coverage = analyse_material(session, material_id)
+            if coverage_cache is not None:
+                coverage_cache[material_id] = coverage
         for allocation in coverage.allocations:
             if allocation.requirement.production_batch_id not in batch_id_set:
                 continue
@@ -586,6 +605,45 @@ def _outstanding_value(
     return total.quantize(Decimal("0.01")), basis
 
 
+_QC_WORD = {
+    "pass": "passed",
+    "reject": "rejected",
+    "rework": "rework",
+    "conditional_pass": "conditional pass",
+    "pending": "awaiting a verdict",
+}
+
+
+def next_blocker(assessment: OrderAssessment) -> str | None:
+    """The first thing standing between this order and delivery, in plain words.
+
+    Derived only from facts already on the assessment, in the order a planner
+    would deal with them: a stopped batch before a missing material, a missing
+    material before a late one. ``None`` when nothing is in the way — which is
+    shown as nothing, not as a reassuring phrase, so that an order is only ever
+    described as clear by the absence of a problem the system can name.
+    """
+    if not assessment.is_open:
+        return None
+    if assessment.blocked_reasons:
+        return f"Production blocked: {assessment.blocked_reasons[0]}"
+    if assessment.qc_status in ("rejected", "reject"):
+        return "Cloth failed QC; a replacement is needed"
+    if assessment.material_readiness == MaterialReadiness.SHORT:
+        return "Material short for a planned batch"
+    if assessment.completion_unknown_reason == "materials_not_covered":
+        return "Materials not covered; no achievable date"
+    if assessment.completion_unknown_reason == "nothing_planned":
+        return "Nothing planned to make the outstanding quantity"
+    if assessment.material_readiness == MaterialReadiness.PARTIAL:
+        return "Material arrives after the batch needs it"
+    if assessment.risk == RiskLevel.LATE:
+        return "Promised date has passed"
+    if assessment.days_ahead is not None and assessment.days_ahead < 0:
+        return f"Production finishes {-assessment.days_ahead} days after the promise"
+    return None
+
+
 def assess_open_orders(session: Session) -> list[OrderAssessment]:
     orders = session.scalars(
         select(SalesOrder)
@@ -600,6 +658,7 @@ def assess_open_orders(session: Session) -> list[OrderAssessment]:
     line_ids = [line.id for order in orders for line in order.lines]
     batches = batches_by_order_line(session, line_ids)
     shipments = shipments_by_order_line(session, line_ids)
+    coverage_cache: dict[uuid.UUID, Any] = {}
     return [
         assess_order(
             session,
@@ -607,6 +666,7 @@ def assess_open_orders(session: Session) -> list[OrderAssessment]:
             finished_goods=finished_goods,
             batches=batches,
             shipments=shipments,
+            coverage_cache=coverage_cache,
         )
         for order in orders
     ]
@@ -635,7 +695,7 @@ def order_timeline(session: Session, order: SalesOrder) -> list[TimelineEvent]:
             at=dt.datetime.combine(order.order_date, midnight),
             kind="order",
             title=f"Order {order.number} placed",
-            detail=f"{order.customer.name} · promised {order.promised_date.isoformat()}",
+            detail=f"{order.customer.name} · promised for {prose.when(order.promised_date)}",
             entity_type="sales_order",
             entity_id=order.id,
         )
@@ -646,7 +706,9 @@ def order_timeline(session: Session, order: SalesOrder) -> list[TimelineEvent]:
                 at=order.confirmed_at,
                 kind="order",
                 title="Order confirmed",
-                detail=f"Status moved to {order.status.value}.",
+                # Not "status moved to <current status>": that reported today's
+                # status as though it were what confirmation set.
+                detail="Accepted and entered into the plan.",
             )
         )
 
@@ -662,8 +724,8 @@ def order_timeline(session: Session, order: SalesOrder) -> list[TimelineEvent]:
                 TimelineEvent(
                     at=event.occurred_at,
                     kind="production",
-                    title=f"{batch.code} · {event.event_type.value.replace('_', ' ')}",
-                    detail=event.note or f"{batch.stage.value} batch",
+                    title=f"{batch.code} {event.event_type.value.replace('_', ' ')}",
+                    detail=event.note or f"{batch.stage.value.capitalize()} batch.",
                     entity_type="production_batch",
                     entity_id=batch.id,
                 )
@@ -675,7 +737,10 @@ def order_timeline(session: Session, order: SalesOrder) -> list[TimelineEvent]:
                 TimelineEvent(
                     at=inspection.inspected_at,
                     kind="quality",
-                    title=f"QC {inspection.code} · {inspection.outcome.value}",
+                    title=(
+                        f"QC {inspection.code}: "
+                        f"{_QC_WORD.get(inspection.outcome.value, inspection.outcome.value)}"
+                    ),
                     detail=inspection.notes or f"Inspection of {batch.code}",
                     entity_type="qc_inspection",
                     entity_id=inspection.id,
@@ -695,7 +760,7 @@ def order_timeline(session: Session, order: SalesOrder) -> list[TimelineEvent]:
                     kind="shipment",
                     title=f"Shipment {shipment.number} dispatched",
                     detail=f"{shipment.carrier or 'Carrier not recorded'} · "
-                    f"expected {shipment.expected_delivery_date or 'unknown'}",
+                    f"expected {prose.when(shipment.expected_delivery_date)}",
                     entity_type="shipment",
                     entity_id=shipment.id,
                 )

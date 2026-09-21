@@ -128,7 +128,10 @@ class Impact:
         note = (
             None
             if basis == CALCULATED
-            else f"{len(self.affected_orders) - len(priced)} affected order(s) have no prices."
+            else (
+                f"{len(self.affected_orders) - len(priced)} of the affected orders "
+                "have no prices."
+            )
         )
         return total, basis, note, next(iter(currencies))
 
