@@ -41,7 +41,8 @@ from textileops.models.enums import (
     ProposalOrigin,
 )
 from textileops.models.exceptions import Investigation, OperationalException
-from textileops.services import actions, clock
+from textileops.models.production import ProductionBatch
+from textileops.services import actions, clock, production, prose
 from textileops.services.actions import EXECUTION_MODES
 from textileops.services.audit import record_audit, record_metric
 
@@ -132,9 +133,9 @@ def investigate_exception(
         entity_type=EntityType.EXCEPTION,
         entity_id=exception.id,
         summary=(
-            f"{exception.code} investigated by {provider.name}"
-            + (" (deterministic rules)" if result.stubbed else "")
-            + f"; {len(result.tool_calls)} read-only tool call(s)."
+            f"{exception.code} investigated by "
+            + ("the rule engine (no model)" if result.stubbed else provider.name)
+            + f"; {prose.plural(len(result.tool_calls), 'read-only lookup')}."
         ),
         actor_type="ai",
         actor_user_id=user_id,
@@ -325,7 +326,7 @@ def _create_proposals(
         # model's title and rationale; what would execute is the payload, so the
         # two must be about the same thing.
         staged = dict(candidate.payload or {})
-        default = _default_payload(exception, action_type)
+        default = _default_payload(exception, action_type, session)
         if staged and not _payload_matches_exception(exception, action_type, staged):
             logger.warning(
                 "proposal_payload_rejected_off_target",
@@ -341,6 +342,22 @@ def _create_proposals(
             )
             staged = {}
         payload = staged or default
+        if (
+            action_type == ActionType.SCHEDULE_REPLACEMENT_BATCH
+            and exception.production_batch_id is not None
+        ):
+            original = session.get(ProductionBatch, exception.production_batch_id)
+            if original is not None and production.replacement_still_needed(session, original) <= 0:
+                # Recommending a remake of cloth that is already being remade is
+                # a proposal a tired person approves, and it doubles the yarn.
+                discarded.append(
+                    {
+                        "action_type": action_type.value,
+                        "title": candidate.title,
+                        "reason": "already_being_replaced",
+                    }
+                )
+                continue
         if payload is None:
             logger.info(
                 "proposal_skipped_no_payload",
@@ -431,7 +448,9 @@ def _payload_matches_exception(
 
 
 def _default_payload(
-    exception: OperationalException, action_type: ActionType
+    exception: OperationalException,
+    action_type: ActionType,
+    session: Session | None = None,
 ) -> dict[str, Any] | None:
     """Fill a proposal payload from the exception's own links.
 
@@ -466,10 +485,20 @@ def _default_payload(
         metrics = exception.detection_metrics or {}
         if not exception.production_batch_id or not metrics.get("rejected_quantity"):
             return None
+        # Only what is not already being remade. A replacement planned when the
+        # QC result was recorded — the normal case — leaves nothing to propose.
+        if session is None:
+            return None
+        original = session.get(ProductionBatch, exception.production_batch_id)
+        if original is None:
+            return None
+        outstanding = production.replacement_still_needed(session, original)
+        if outstanding <= 0:
+            return None
         return {
             "production_batch_id": str(exception.production_batch_id),
-            "quantity": metrics["rejected_quantity"],
-            "unit": metrics.get("unit", "m"),
+            "quantity": str(outstanding),
+            "unit": original.unit.value,
             "duration_days": 7,
         }
     if action_type == ActionType.REQUEST_QC_REINSPECTION:

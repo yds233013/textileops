@@ -42,7 +42,7 @@ from textileops.models.production import (
     ProductionMaterialRequirement,
 )
 from textileops.models.sales import SalesOrderLine
-from textileops.services import clock, inventory
+from textileops.services import clock, inventory, prose
 from textileops.services.audit import record_audit
 
 ZERO = Decimal("0")
@@ -603,7 +603,10 @@ def complete_batch(
         action="production.completed",
         entity_type=EntityType.PRODUCTION_BATCH,
         entity_id=batch.id,
-        summary=f"Batch {batch.code} completed with {batch.output_quantity} {batch.unit.value}.",
+        summary=(
+            f"Batch {batch.code} completed with "
+            f"{prose.qty(batch.output_quantity, batch.unit)}."
+        ),
         actor_type="user" if user_id else "system",
         actor_user_id=user_id,
     )
@@ -645,6 +648,45 @@ def propagate_produced_quantity(session: Session, batch: ProductionBatch) -> Non
     # ordered more than they did. The true figure stays on the batch, in
     # ``output_quantity``.
     line.produced_quantity = quantize(min(total, line.quantity))
+
+
+def replacement_still_needed(session: Session, original: ProductionBatch) -> Decimal:
+    """How much of this batch's rejected cloth is not yet covered by a replacement.
+
+    Rejected quantity comes from the batch's *current* QC verdicts — an
+    inspection that was later re-inspected is superseded by the re-inspection —
+    and cover is every replacement batch already planned against it that has not
+    been cancelled. A completed or even re-rejected replacement still counts as
+    cover here: its own shortfall is its own QC's business, against its own
+    batch, not a reason to remake this one again.
+
+    Without this the proposal gate would happily plan a second full replacement
+    for cloth already being remade — twice the yarn reserved, twice the machine
+    time, for one loss.
+    """
+    from textileops.models.quality import QCInspection
+
+    inspections = list(
+        session.scalars(
+            select(QCInspection).where(QCInspection.production_batch_id == original.id)
+        ).all()
+    )
+    superseded = {i.reinspection_of_id for i in inspections if i.reinspection_of_id}
+    rejected = sum(
+        (
+            convert(i.rejected_quantity, i.unit, original.unit)
+            for i in inspections
+            if i.id not in superseded
+        ),
+        Decimal("0"),
+    )
+    covered = session.scalar(
+        select(func.coalesce(func.sum(ProductionBatch.planned_quantity), 0)).where(
+            ProductionBatch.rework_of_batch_id == original.id,
+            ProductionBatch.status != ProductionStatus.CANCELLED,
+        )
+    )
+    return max(Decimal("0"), quantize(rejected - Decimal(covered or 0)))
 
 
 def create_rework_batch(

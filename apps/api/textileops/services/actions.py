@@ -50,6 +50,7 @@ from textileops.models.enums import (
     ExceptionStatus,
     ExecutionMode,
     ExecutionStatus,
+    ProductionStatus,
     ProposalOrigin,
     ProposalStatus,
     QCOutcome,
@@ -61,7 +62,7 @@ from textileops.models.org import User
 from textileops.models.procurement import PurchaseOrder, PurchaseOrderLine
 from textileops.models.production import ProductionBatch
 from textileops.models.quality import QCInspection
-from textileops.services import clock, production
+from textileops.services import clock, production, prose
 from textileops.services.audit import record_audit, record_metric
 
 logger = get_logger(__name__)
@@ -555,6 +556,26 @@ def _execute_replacement_batch(
     original = session.get(ProductionBatch, payload.production_batch_id)
     if original is None:
         raise NotFoundError(f"Production batch {payload.production_batch_id} not found.")
+    # Checked again at execution, not only when the proposal was drafted: a
+    # replacement may have been scheduled by hand, or by another approval, in
+    # between. Two approvals must not remake the same rejected cloth twice.
+    lock_row(session, original)
+    outstanding = production.replacement_still_needed(session, original)
+    wanted = quantize(payload.quantity)
+    if wanted > outstanding:
+        existing = ", ".join(
+            session.scalars(
+                select(ProductionBatch.code).where(
+                    ProductionBatch.rework_of_batch_id == original.id,
+                    ProductionBatch.status != ProductionStatus.CANCELLED,
+                )
+            ).all()
+        ) or "none"
+        raise ConflictError(
+            f"{original.code} has {prose.qty(outstanding, original.unit)} of rejected cloth "
+            f"still to replace, and this would plan {prose.qty(wanted, original.unit)}. "
+            f"Replacements already planned: {existing}."
+        )
     batch = production.create_rework_batch(
         session,
         original,
@@ -625,7 +646,14 @@ def _execute_priority_change(
     batch = session.get(ProductionBatch, payload.production_batch_id)
     if batch is None:
         raise NotFoundError(f"Production batch {payload.production_batch_id} not found.")
+    lock_row(session, batch)
     before = batch.priority
+    if before == payload.priority:
+        # An approved action that changed nothing would still read as "done" in
+        # the audit trail and on the proposal. Say so instead.
+        raise ConflictError(
+            f"{batch.code} is already at priority {before}; this would change nothing."
+        )
     batch.priority = payload.priority
     production.add_event(
         session,

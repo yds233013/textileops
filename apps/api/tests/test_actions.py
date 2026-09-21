@@ -273,3 +273,28 @@ def test_a_failed_executor_leaves_nothing_behind(session, fabric, yarn, user):
             session.scalar(select(func.count(InventoryReservation.id)))
             == reservations_before
         )
+
+
+def test_a_priority_change_that_changes_nothing_is_refused(session, fabric, customer, user):
+    """Found in the demo: an approved action logged "priority changed from 1 to
+    1", and the proposal read as executed. An approval that did nothing must
+    not look like one that did something."""
+    from tests.conftest import make_batch, make_sales_order
+    from textileops.models.enums import ActionType, ProposalOrigin
+    from textileops.services import actions
+
+    order = make_sales_order(session, customer, fabric)
+    batch = make_batch(session, fabric, order)
+    session.flush()
+    proposal = actions.create_proposal(
+        session,
+        action_type=ActionType.CHANGE_PRODUCTION_PRIORITY,
+        title="Re-prioritise",
+        rationale="r",
+        payload={"production_batch_id": str(batch.id), "priority": batch.priority},
+        origin=ProposalOrigin.RULE_ENGINE,
+    )
+    _approval, execution = actions.approve(session, proposal, user_id=user.id)
+    assert execution is not None
+    assert execution.status.value == "failed"
+    assert "change nothing" in (execution.error or "")

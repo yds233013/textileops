@@ -326,3 +326,96 @@ def test_the_checker_does_not_flag_rework_as_unscrapped(session, produced):
     _order, batch = produced
     _inspect(session, batch, QCOutcome.REWORK, "0", "1000")
     assert integrity.run(session, only=["rejected_stock_available"]).ok
+
+
+# --- A proposed replacement for cloth already being remade --------------------
+#
+# Found by seeding the demo through the real workflow. Recording a QC reject
+# already plans a replacement batch. The investigation of the same QC failure
+# then recommended "schedule the replacement batch", the gate built a payload
+# from the exception's rejected quantity, and approving it planned B-1035-R2 —
+# a second full remake of 4,800 yd, with its own yarn reservations, for one
+# loss. Neither the gate nor the executor asked whether the loss was covered.
+
+
+def _replacement_proposal(session, batch, quantity="1000"):
+    from textileops.models.enums import ActionType, ProposalOrigin
+    from textileops.services import actions
+
+    return actions.create_proposal(
+        session,
+        action_type=ActionType.SCHEDULE_REPLACEMENT_BATCH,
+        title="Schedule the replacement batch",
+        rationale="QC rejected the batch.",
+        payload={
+            "production_batch_id": str(batch.id),
+            "quantity": quantity,
+            "unit": "m",
+            "duration_days": 7,
+        },
+        origin=ProposalOrigin.AI_INVESTIGATION,
+    )
+
+
+def test_nothing_is_left_to_replace_once_a_replacement_is_planned(session, produced):
+    _order, batch = produced
+    assert production.replacement_still_needed(session, batch) == 0
+    _inspect(session, batch, QCOutcome.REJECT, "0", "1000")
+    assert production.replacement_still_needed(session, batch) == 0
+
+
+def test_approving_a_second_replacement_is_refused(session, produced, user):
+    """The executor checks, even if a proposal got past the gate."""
+    from textileops.models.production import ProductionBatch
+    from textileops.services import actions
+
+    _order, batch = produced
+    _inspect(session, batch, QCOutcome.REJECT, "0", "1000")
+    proposal = _replacement_proposal(session, batch)
+    session.flush()
+
+    # Approval is recorded — a person did decide — but execution refuses, and
+    # says why, rather than quietly planning the second remake.
+    _approval, execution = actions.approve(session, proposal, user_id=user.id)
+    assert execution is not None
+    assert execution.status.value == "failed"
+    assert "still to replace" in (execution.error or "")
+
+    replacements = session.scalars(
+        select(ProductionBatch).where(ProductionBatch.rework_of_batch_id == batch.id)
+    ).all()
+    assert len(replacements) == 1, "a second replacement batch was planned"
+
+
+def test_an_investigation_does_not_propose_remaking_covered_cloth(session, produced, user):
+    """The gate: the recommendation is recorded as refused, and says why."""
+    from textileops.models.actions import ActionProposal
+    from textileops.models.enums import ActionType
+    from textileops.services import exception_engine, investigation
+
+    _order, batch = produced
+    _inspect(session, batch, QCOutcome.REJECT, "0", "1000")
+    exception_engine.run(session)
+    session.flush()
+    from textileops.models.enums import ExceptionType
+    from textileops.models.exceptions import OperationalException
+
+    exception = session.scalars(
+        select(OperationalException).where(
+            OperationalException.exception_type == ExceptionType.QC_FAILURE,
+            OperationalException.production_batch_id == batch.id,
+        )
+    ).one()
+    result = investigation.investigate_exception(session, exception, user_id=user.id)
+    session.flush()
+
+    replacement_proposals = session.scalars(
+        select(ActionProposal).where(
+            ActionProposal.exception_id == exception.id,
+            ActionProposal.action_type == ActionType.SCHEDULE_REPLACEMENT_BATCH,
+        )
+    ).all()
+    assert replacement_proposals == []
+    discarded = (result.findings or {}).get("discarded_recommendations", [])
+    if any(d["action_type"] == "schedule_replacement_batch" for d in discarded):
+        assert any(d["reason"] == "already_being_replaced" for d in discarded)
