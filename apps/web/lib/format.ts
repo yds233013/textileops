@@ -10,7 +10,8 @@ export function quantity(value: string | number | null | undefined, unit?: strin
   if (value === null || value === undefined || value === "") return "—";
   const numeric = typeof value === "string" ? Number(value) : value;
   if (Number.isNaN(numeric)) return String(value);
-  const formatted = numeric.toLocaleString(undefined, {
+  // Fixed locale: the same figure must read the same on every screen.
+  const formatted = numeric.toLocaleString("en-US", {
     minimumFractionDigits: 0,
     maximumFractionDigits: Number.isInteger(numeric) ? 0 : 3,
   });
@@ -32,7 +33,7 @@ export function money(
   const numeric = typeof value === "string" ? Number(value) : value;
   if (Number.isNaN(numeric)) return String(value);
   const symbol = currency ? (CURRENCY_SYMBOL[currency] ?? `${currency} `) : "";
-  return `${symbol}${numeric.toLocaleString(undefined, {
+  return `${symbol}${numeric.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -51,33 +52,59 @@ function parseCalendarDate(value: string): Date | null {
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
+/**
+ * Day before month, always: "20 Sep 2026". Unambiguous in India, the UK and the
+ * US alike, which "09/10/2026" is not — and a delivery date read the wrong way
+ * round is a promise broken by formatting.
+ */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Written by hand: locales disagree ("Sept", "sep.") and a table needs one form. */
+function dayMonth(d: Date, withYear: boolean): string {
+  const base = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  return withYear ? `${base} ${d.getFullYear()}` : base;
+}
+
 export function date(value: string | null | undefined): string {
   if (!value) return "—";
   const parsed = parseCalendarDate(value) ?? new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString(undefined, {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  return dayMonth(parsed, true);
+}
+
+/** "20 Sep" this year, "20 Sep 2025" otherwise. For tables and dense rows. */
+export function shortDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = parseCalendarDate(value) ?? new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return dayMonth(parsed, parsed.getFullYear() !== new Date().getFullYear());
 }
 
 export function dateTime(value: string | null | undefined): string {
   if (!value) return "—";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString(undefined, {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const time = `${String(parsed.getHours()).padStart(2, "0")}:${String(parsed.getMinutes()).padStart(2, "0")}`;
+  return `${dayMonth(parsed, parsed.getFullYear() !== new Date().getFullYear())}, ${time}`;
+}
+
+/** "4 min ago", "3 h ago", "2 days ago" — for when something happened. */
+export function ago(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const minutes = Math.round((Date.now() - parsed.getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
 export function relativeAge(hours: number): string {
   if (hours < 1) return "just now";
-  if (hours < 24) return `${Math.round(hours)}h ago`;
+  if (hours < 24) return `${Math.round(hours)} h ago`;
   const days = Math.round(hours / 24);
   return days === 1 ? "yesterday" : `${days} days ago`;
 }
@@ -99,6 +126,15 @@ export function dueText(value: string | null | undefined): string {
   if (days === 1) return "tomorrow";
   if (days === -1) return "1 day ago";
   return days > 0 ? `in ${days} days` : `${Math.abs(days)} days ago`;
+}
+
+/** A plain number with grouping and no trailing zeros: 1942.500 → "1,942.5". */
+export function num(value: string | number | null | undefined): string {
+  return quantity(value);
+}
+
+export function plural(count: number, singular: string, pluralForm?: string): string {
+  return `${count} ${count === 1 ? singular : (pluralForm ?? `${singular}s`)}`;
 }
 
 /** "supplier_delay" → "Supplier delay" */

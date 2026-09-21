@@ -85,3 +85,16 @@ export function useAction<TArgs extends unknown[], TResult>(
 
   return { run, pending, error, clearError: () => setError(null) };
 }
+
+/**
+ * Read a query-string value once, on the client. Deliberately not
+ * `useSearchParams`, which forces a Suspense boundary around every page that
+ * uses it; these values only seed a filter's initial state.
+ */
+export function useInitialParam(name: string): string | null {
+  const [value, setValue] = useState<string | null>(null);
+  useEffect(() => {
+    setValue(new URLSearchParams(window.location.search).get(name));
+  }, [name]);
+  return value;
+}

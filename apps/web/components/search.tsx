@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { humanise } from "@/lib/format";
 import type { SearchHit } from "@/lib/types";
-import { inputClass } from "./ui";
+import { IconSearch } from "./icons";
 
 /** Global search: order number, PO, supplier, customer, material, batch, shipment. */
 export function GlobalSearch() {
@@ -49,6 +49,10 @@ export function GlobalSearch() {
       <label htmlFor="global-search" className="sr-only">
         Search orders, purchase orders, suppliers, materials, batches
       </label>
+      <IconSearch
+        size={15}
+        className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400"
+      />
       <input
         id="global-search"
         type="search"
@@ -56,12 +60,12 @@ export function GlobalSearch() {
         onChange={(event) => setTerm(event.target.value)}
         onFocus={() => hits.length > 0 && setOpen(true)}
         onKeyDown={(event) => event.key === "Escape" && setOpen(false)}
-        placeholder="Search SO-1003, PO-00002, a supplier, 40s yarn, B-1042…"
-        className={inputClass}
+        placeholder="Search orders, POs, suppliers, batches…"
+        className="block h-8 w-full rounded-md border-0 bg-ink-50 pl-8 pr-3 text-[13px] text-ink-900 ring-1 ring-inset ring-ink-150 placeholder:text-ink-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
         autoComplete="off"
       />
       {open && (
-        <div className="absolute z-40 mt-1 w-full overflow-hidden rounded-md border border-ink-200 bg-white shadow-lg">
+        <div className="absolute z-40 mt-1.5 w-full min-w-[22rem] overflow-hidden rounded-lg bg-white shadow-overlay">
           {hits.length === 0 ? (
             <p className="px-3 py-2 text-sm text-ink-500">
               Nothing matches “{term}”.
@@ -76,13 +80,13 @@ export function GlobalSearch() {
                       setOpen(false);
                       setTerm("");
                     }}
-                    className="block px-3 py-2 hover:bg-ink-50"
+                    className="block px-3 py-2 hover:bg-brand-50/60"
                   >
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="truncate text-sm font-medium text-ink-900">
                         {hit.label}
                       </span>
-                      <span className="shrink-0 text-[11px] uppercase tracking-wide text-ink-400">
+                      <span className="shrink-0 text-2xs font-medium uppercase tracking-wide text-ink-400">
                         {humanise(hit.entity_type)}
                       </span>
                     </span>

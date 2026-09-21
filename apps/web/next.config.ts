@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   reactStrictMode: true,
+  // The floating dev badge sat on top of the navigation in every review.
+  devIndicators: false,
+  poweredByHeader: false,
   // This app has its own lockfile inside a monorepo; pin the trace root so the
   // build does not guess at a parent directory.
   outputFileTracingRoot: __dirname,

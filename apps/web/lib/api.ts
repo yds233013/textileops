@@ -111,5 +111,11 @@ export const api = {
       body: { email, password },
     }),
   me: () => apiFetch("/auth/me"),
+  demoInfo: () =>
+    apiFetch<{ enabled: boolean; email: string | null; full_name: string | null; role: string | null }>(
+      "/auth/demo",
+    ),
+  demoLogin: () =>
+    apiFetch<{ access_token: string; user: unknown }>("/auth/demo-login", { method: "POST" }),
   health: () => apiFetch("/health"),
 };

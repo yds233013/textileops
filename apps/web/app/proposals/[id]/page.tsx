@@ -3,23 +3,41 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { IconArrowRight, IconCheckCircle } from "@/components/icons";
+import { originText } from "@/components/proposals";
 import {
-  Badge,
+  Alert,
   Button,
   Card,
   ConfirmDialog,
-  DefinitionList,
+  Disclosure,
   ErrorState,
   Loading,
   PageHeader,
-  Table,
-  Td,
+  StatusPill,
+  Timeline,
   inputClass,
+  textareaClass,
 } from "@/components/ui";
 import { apiFetch } from "@/lib/api";
-import { dateTime, humanise } from "@/lib/format";
+import { ago, dateTime, humanise, num, shortDate } from "@/lib/format";
 import { useAction, useApi } from "@/lib/hooks";
+import { actionTypeLabel } from "@/lib/labels";
 import type { Proposal } from "@/lib/types";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
+
+/** A result or payload value, as a person reads it. Identifiers stay out of prose. */
+function readable(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number") return num(value);
+  if (typeof value === "string") {
+    if (/^-?\d+(\.\d+)?$/.test(value)) return num(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return shortDate(value);
+    return value;
+  }
+  return JSON.stringify(value);
+}
 
 export default function ProposalDetailPage() {
   const params = useParams<{ id: string }>();
@@ -48,82 +66,90 @@ export default function ProposalDetailPage() {
     if (decision === "approve" && data?.draft_body && body !== data.draft_body) {
       await apiFetch(`/proposals/${id}/draft`, { method: "PATCH", body: { body, subject } });
     }
-    const result = await apiFetch<{ message?: string; outcome?: string }>(
-      `/proposals/${id}/${decision}`,
-      { body: { note } },
-    );
-    setOutcome({
-      text: result.message ?? "Recorded.",
-      kind: result.outcome ?? "ok",
+    const result = await apiFetch<{ message?: string; outcome?: string }>(`/proposals/${id}/${decision}`, {
+      body: { note },
     });
+    setOutcome({ text: result.message ?? "Recorded.", kind: result.outcome ?? "ok" });
     setConfirming(null);
     setNote("");
     reload();
   });
 
-  if (loading && !data) return <Loading label="Opening the proposal" />;
+  if (loading && !data) return <Loading variant="page" label="Opening the proposal" />;
   if (error && !data) return <ErrorState error={error} onRetry={reload} />;
   if (!data) return null;
 
   const pending = data.status === "pending_approval";
   const execution = data.executions[data.executions.length - 1];
+  const external = data.execution_mode === "external_draft";
+  const edited = pending && data.draft_body !== null && (body !== (data.draft_body ?? "") || subject !== (data.draft_subject ?? ""));
+
+  const history = [
+    {
+      key: "created",
+      at: dateTime(data.created_at),
+      title: "Proposed",
+      detail: originText(data),
+      tone: "neutral" as const,
+    },
+    ...data.approvals.map((approval) => ({
+      key: approval.id,
+      at: dateTime(approval.decided_at),
+      title: approval.decision === "approved" ? `Approved by ${approval.decided_by_name ?? "a person"}` : `Rejected by ${approval.decided_by_name ?? "a person"}`,
+      detail: approval.note ? `“${approval.note}”` : undefined,
+      tone: approval.decision === "approved" ? ("ok" as const) : ("bad" as const),
+    })),
+    ...data.executions.map((ex) => ({
+      key: ex.id,
+      at: dateTime(ex.completed_at ?? ex.attempted_at),
+      title:
+        ex.status === "succeeded"
+          ? "Carried out by TextileOps"
+          : ex.status === "awaiting_external"
+            ? "Draft ready — waiting for a person to send it"
+            : ex.status === "failed"
+              ? "Could not be carried out"
+              : humanise(ex.status),
+      detail: ex.error ?? undefined,
+      tone: ex.status === "failed" ? ("bad" as const) : ex.status === "awaiting_external" ? ("warn" as const) : ("ok" as const),
+    })),
+  ];
 
   return (
     <>
       <PageHeader
         breadcrumb={[{ label: "Approvals", href: "/proposals" }]}
+        eyebrow={actionTypeLabel(data.action_type)}
         title={data.title}
-        description={data.rationale}
+        meta={
+          <>
+            <StatusPill value={data.status} />
+            <span className="text-xs text-ink-500">{originText(data)} · {ago(data.created_at)}</span>
+            <span className="font-mono text-2xs text-ink-400">{data.code}</span>
+          </>
+        }
         actions={
           pending ? (
             <>
-              <Button variant="primary" onClick={() => setConfirming("approve")}>
-                Approve
-              </Button>
               <Button variant="danger" onClick={() => setConfirming("reject")}>
                 Reject
+              </Button>
+              <Button variant="primary" icon={<IconCheckCircle size={15} />} onClick={() => setConfirming("approve")}>
+                {external ? "Approve draft" : "Approve and carry out"}
               </Button>
             </>
           ) : null
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Badge tone={pending ? "warn" : "neutral"}>{humanise(data.status)}</Badge>
-        <Badge tone="neutral">{humanise(data.action_type)}</Badge>
-        <Badge tone={data.origin === "ai_investigation" ? "warn" : "neutral"}>
-          {humanise(data.origin)}
-          {data.model ? ` · ${data.model}` : ""}
-        </Badge>
-        <span className="font-mono text-xs text-ink-400">{data.code}</span>
-        {data.exception_id && (
-          <Link
-            href={`/exceptions/${data.exception_id}`}
-            className="text-xs text-ink-600 hover:underline"
-          >
-            View the exception →
-          </Link>
-        )}
-      </div>
-
-      {/* The request succeeding is not the same as the action succeeding.
-          "Approved, but execution failed: …" came back as HTTP 200 and was
-          rendered in the same success green as "Approved and carried out" —
-          so an operator whose ETA revision had failed to apply saw green and
-          moved on. The banner now takes its colour from what happened. */}
+      {/* The request succeeding is not the same as the action succeeding: the
+          banner takes its colour from what actually happened. */}
       {outcome && (
-        <p
-          role={outcome.kind === "failed" ? "alert" : "status"}
-          className={
-            outcome.kind === "failed"
-              ? "mb-4 rounded border border-critical-border bg-critical-bg px-3 py-2 text-sm text-critical-text"
-              : outcome.kind === "awaiting_external"
-                ? "mb-4 rounded border border-medium-border bg-medium-bg px-3 py-2 text-sm text-medium-text"
-                : "mb-4 rounded border border-good-border bg-good-bg px-3 py-2 text-sm text-good-text"
-          }
-        >
-          {outcome.text}
-        </p>
+        <div className="mb-4">
+          <Alert tone={outcome.kind === "failed" ? "bad" : outcome.kind === "awaiting_external" ? "warn" : "ok"}>
+            {outcome.text}
+          </Alert>
+        </div>
       )}
       {decide.error && (
         <div className="mb-4">
@@ -131,29 +157,56 @@ export default function ProposalDetailPage() {
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <Card
-            title="What approving this does"
-            subtitle={data.effect_description}
-          >
-            <pre className="overflow-x-auto rounded bg-ink-50 px-3 py-2 text-xs text-ink-700">
-              {JSON.stringify(data.payload, null, 2)}
-            </pre>
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-6">
+          <Card title="Why" subtitle="The case for doing this, as written by whoever proposed it.">
+            <p className="max-w-prose text-[14px] leading-6 text-ink-800">{data.rationale}</p>
+            {data.exception_id && (
+              <Link
+                href={`/exceptions/${data.exception_id}`}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-ink-50 px-2.5 py-1.5 text-[13px] text-ink-700 hover:bg-ink-100 hover:text-ink-950"
+              >
+                About: <span className="font-medium">{data.exception_title ?? data.exception_code}</span>
+                <IconArrowRight size={13} />
+              </Link>
+            )}
+          </Card>
+
+          <Card title="What approving does">
+            <div className={`rounded-md border px-3 py-2.5 text-[13.5px] ${external ? "border-medium-border bg-medium-bg text-medium-text" : "border-info-border bg-info-bg text-info-text"}`}>
+              {data.effect_description}
+            </div>
+            <div className="mt-3">
+              <Disclosure summary="Exact arguments the executor receives">
+                <dl className="grid gap-x-6 gap-y-1.5 rounded-md bg-ink-50 px-3 py-2.5 text-xs sm:grid-cols-2">
+                  {Object.entries(data.payload).map(([key, value]) => (
+                    <div key={key} className="flex justify-between gap-3">
+                      <dt className="text-ink-500">{humanise(key)}</dt>
+                      <dd className={`text-right text-ink-800 ${typeof value === "string" && UUID.test(value) ? "font-mono text-2xs text-ink-500" : "tnum"}`}>
+                        {readable(value)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="mt-1.5 text-xs text-ink-500">Checked against the exception it belongs to before it was offered to you, and validated again on approval.</p>
+              </Disclosure>
+            </div>
           </Card>
 
           {data.draft_body !== null && (
             <Card
               title="Draft message"
-              subtitle="TextileOps has no connected mailbox. Approving records the decision and leaves
-                you this text to send yourself."
+              subtitle={
+                pending
+                  ? "Edit it before approving if you like — the original stays on the record. TextileOps sends nothing; you will send this yourself."
+                  : "TextileOps has no connected mailbox. This is the text to send."
+              }
               actions={
                 <>
                   <Button
+                    size="sm"
                     onClick={() => {
-                      navigator.clipboard?.writeText(
-                        subject ? `Subject: ${subject}\n\n${body}` : body,
-                      );
+                      navigator.clipboard?.writeText(subject ? `Subject: ${subject}\n\n${body}` : body);
                       setCopied(true);
                       setTimeout(() => setCopied(false), 2000);
                     }}
@@ -161,8 +214,8 @@ export default function ProposalDetailPage() {
                     {copied ? "Copied" : "Copy"}
                   </Button>
                   {pending && (
-                    <Button onClick={() => saveDraft.run()} disabled={saveDraft.pending}>
-                      {saveDraft.pending ? "Saving…" : "Save edits"}
+                    <Button size="sm" onClick={() => saveDraft.run()} disabled={!edited} loading={saveDraft.pending}>
+                      Save edits
                     </Button>
                   )}
                 </>
@@ -191,95 +244,86 @@ export default function ProposalDetailPage() {
                     disabled={!pending}
                     rows={12}
                     onChange={(event) => setBody(event.target.value)}
-                    className={`${inputClass} mt-1 font-mono text-xs leading-relaxed`}
+                    className={`${textareaClass} mt-1 max-w-prose leading-6`}
                   />
                 </div>
                 {data.draft_edited && (
-                  <p className="text-xs text-ink-500">
-                    This draft has been edited by an operator. The original is kept in the record.
-                  </p>
+                  <p className="text-xs text-ink-500">Edited by an operator. The original draft is kept in the record.</p>
                 )}
               </div>
             </Card>
           )}
 
           {execution && (
-            <Card title="Execution">
-              <DefinitionList
-                items={[
-                  { term: "Mode", value: humanise(execution.mode) },
-                  { term: "Status", value: humanise(execution.status) },
-                  { term: "Attempted", value: dateTime(execution.attempted_at) },
-                  {
-                    term: "Completed",
-                    value: execution.completed_at ? dateTime(execution.completed_at) : "—",
-                  },
-                ]}
-              />
-              {execution.result && (
-                <pre className="mt-3 overflow-x-auto rounded bg-ink-50 px-3 py-2 text-xs text-ink-700">
-                  {JSON.stringify(execution.result, null, 2)}
-                </pre>
+            <Card title="Outcome">
+              <div className="flex items-center gap-2">
+                <StatusPill value={execution.status} />
+                <span className="text-xs text-ink-500">{dateTime(execution.completed_at ?? execution.attempted_at)}</span>
+              </div>
+              {execution.result && Object.keys(execution.result).length > 0 && (
+                <dl className="mt-3 grid gap-x-6 gap-y-1.5 text-[13px] sm:grid-cols-2">
+                  {Object.entries(execution.result)
+                    .filter(([, value]) => !(typeof value === "string" && UUID.test(value)))
+                    .map(([key, value]) => (
+                      <div key={key} className="flex justify-between gap-3 border-b border-ink-50 py-1">
+                        <dt className="text-ink-500">{humanise(key)}</dt>
+                        <dd className="text-right font-medium text-ink-900 tnum">{readable(value)}</dd>
+                      </div>
+                    ))}
+                </dl>
               )}
               {execution.error && (
-                <p className="mt-3 rounded border border-critical-border bg-critical-bg px-3 py-2 text-sm text-critical-text">
-                  {execution.error}
-                </p>
+                <div className="mt-3">
+                  <Alert tone="bad" title="Not carried out">
+                    {execution.error}
+                  </Alert>
+                </div>
               )}
             </Card>
           )}
         </div>
 
-        <div className="space-y-4">
-          <Card title="Decision history">
-            {data.approvals.length === 0 ? (
-              <p className="text-sm text-ink-500">No decision has been recorded yet.</p>
-            ) : (
-              <Table caption="Approvals" head={["Decision", "When", "Note"]}>
-                {data.approvals.map((approval) => (
-                  <tr key={approval.id}>
-                    <Td>
-                      <Badge tone={approval.decision === "approved" ? "ok" : "bad"}>
-                        {humanise(approval.decision)}
-                      </Badge>
-                    </Td>
-                    <Td className="whitespace-nowrap text-xs">
-                      {dateTime(approval.decided_at)}
-                    </Td>
-                    <Td className="text-xs">{approval.note ?? "—"}</Td>
-                  </tr>
-                ))}
-              </Table>
-            )}
+        <aside className="space-y-6">
+          <Card title="Decision trail" subtitle="Who proposed it, who decided, and what happened.">
+            <Timeline items={history} />
           </Card>
-
-          <Card title="Details">
-            <DefinitionList
-              items={[
-                { term: "Raised", value: dateTime(data.created_at) },
-                { term: "Expires", value: data.expires_at ? dateTime(data.expires_at) : "—" },
-              ]}
-            />
+          <Card title="Rules that apply">
+            <ul className="space-y-2 text-[13px] leading-5 text-ink-700">
+              <li>Only a person can approve. Investigations and the rule engine can only propose.</li>
+              <li>Whoever raised a proposal needs someone else to approve it; only an owner may approve their own.</li>
+              <li>Approval is checked again at the moment of execution; if the situation has changed, it is refused and says why.</li>
+              {data.expires_at && pending && <li>Lapses on {shortDate(data.expires_at)} if nobody decides.</li>}
+            </ul>
           </Card>
-        </div>
+        </aside>
       </div>
 
       <ConfirmDialog
         open={confirming !== null}
-        title={confirming === "approve" ? "Approve this action" : "Reject this proposal"}
+        title={confirming === "approve" ? (external ? "Approve this draft" : "Approve and carry this out") : "Reject this proposal"}
         pending={decide.pending}
         confirmLabel={confirming === "approve" ? "Approve" : "Reject"}
+        tone={confirming === "reject" ? "danger" : "default"}
         onCancel={() => setConfirming(null)}
         onConfirm={() => confirming && decide.run(confirming)}
         body={
           <div className="space-y-2">
-            <p>{confirming === "approve" ? data.effect_description : "Say why, for the record."}</p>
+            <p>
+              {confirming === "approve"
+                ? data.effect_description
+                : "The proposal is closed and nothing happens. Say why — it stays on the record."}
+            </p>
+            {confirming === "approve" && edited && <p className="text-xs text-medium-text">Your edits to the draft will be saved first.</p>}
+            <label htmlFor="decision-note" className="sr-only">
+              Note
+            </label>
             <textarea
+              id="decision-note"
               value={note}
               onChange={(event) => setNote(event.target.value)}
               rows={3}
-              className={inputClass}
-              placeholder="Optional note"
+              className={textareaClass}
+              placeholder={confirming === "approve" ? "Optional note for the record" : "Reason"}
             />
           </div>
         }

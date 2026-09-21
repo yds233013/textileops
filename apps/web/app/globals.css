@@ -5,12 +5,41 @@
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
+    font-family: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+      Roboto, sans-serif;
+    font-feature-settings: "cv11", "ss01", "ss03";
   }
   body {
-    @apply bg-ink-50 text-ink-900 antialiased;
+    @apply bg-ink-50 text-[13.5px] leading-5 text-ink-900 antialiased;
   }
-  /* Visible focus for keyboard users, everywhere. */
+  /* Numbers line up in every column and every sentence. */
+  table,
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Visible focus for keyboard users, everywhere, in the brand colour. */
   :focus-visible {
-    @apply outline-none ring-2 ring-ink-500 ring-offset-1;
+    @apply outline-none ring-2 ring-brand-500 ring-offset-1 ring-offset-white;
+  }
+  ::selection {
+    @apply bg-brand-100 text-ink-950;
+  }
+}
+
+@layer components {
+  .skeleton {
+    background: linear-gradient(90deg, #eceef2 0px, #f6f7f9 160px, #eceef2 320px);
+    background-size: 800px 100%;
+    @apply animate-shimmer rounded;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

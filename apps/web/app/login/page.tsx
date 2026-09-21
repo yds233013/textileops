@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, setSession } from "@/lib/api";
 import { Button, Field, inputClass } from "@/components/ui";
 
@@ -11,6 +11,24 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [demo, setDemo] = useState<{ enabled: boolean; full_name: string | null } | null>(null);
+
+  useEffect(() => {
+    api.demoInfo().then(setDemo).catch(() => setDemo(null));
+  }, []);
+
+  async function enterDemo() {
+    setPending(true);
+    setError(null);
+    try {
+      const result = await api.demoLogin();
+      setSession(result.access_token, result.user);
+      router.replace("/");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Sign in failed.");
+      setPending(false);
+    }
+  }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -36,6 +54,11 @@ export default function LoginPage() {
             Operations control for Kaveri Knit Fabrics.
           </p>
         </div>
+        {demo?.enabled && (
+          <Button type="button" variant="primary" onClick={enterDemo} disabled={pending}>
+            Explore the demo
+          </Button>
+        )}
         <form
           onSubmit={onSubmit}
           className="space-y-4 rounded-lg border border-ink-200 bg-white p-5 shadow-sm"

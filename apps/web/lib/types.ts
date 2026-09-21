@@ -115,6 +115,15 @@ export interface OrderSummary {
   value_basis: string;
   currency: string;
   open_exception_count: number;
+  items?: {
+    fabric_code: string;
+    fabric_name: string;
+    quantity: string;
+    outstanding_quantity: string;
+    unit: string;
+  }[];
+  /** The first thing in the way, in words; null when nothing the system can name is. */
+  next_blocker?: string | null;
 }
 
 export interface OrderLine {
@@ -573,10 +582,15 @@ export interface Proposal {
   created_at: string;
   expires_at: string | null;
   effect_description: string;
+  created_by_user_id?: string | null;
+  created_by_name?: string | null;
+  exception_code?: string | null;
+  exception_title?: string | null;
   approvals: {
     id: string;
     decision: string;
     decided_by_user_id: string;
+    decided_by_name?: string | null;
     decided_at: string;
     note: string | null;
   }[];
@@ -647,6 +661,7 @@ export interface DocumentDetail extends SourceDocument {
 }
 
 export interface AuditEvent {
+  actor_name?: string | null;
   id: string;
   occurred_at: string;
   actor_type: string;
