@@ -6,8 +6,12 @@
  * leaves the server.
  */
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+/**
+ * Where the browser sends API calls. By default the same origin (`/api/v1`),
+ * which the web server proxies to the API — see app/api/v1/[...path]/route.ts.
+ * Set NEXT_PUBLIC_API_BASE_URL to talk to an API directly (local development).
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api/v1";
 
 const TOKEN_KEY = "textileops.token";
 const USER_KEY = "textileops.user";
@@ -60,7 +64,10 @@ interface RequestOptions {
 }
 
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  const url = new URL(
+    `${API_BASE}${path}`,
+    typeof window !== "undefined" ? window.location.origin : "http://localhost",
+  );
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, String(value));

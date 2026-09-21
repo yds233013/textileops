@@ -87,8 +87,8 @@ export default function ExceptionsPage() {
               { value: "low", label: "Low", count: bySeverity.low ?? 0 },
             ]}
           />
-          <Select id="filter-type" label="Kind" value={type} onChange={setType} options={TYPES} className="w-48" />
-          <Select id="filter-status" label="Status" value={status} onChange={setStatus} options={STATUSES} className="w-64" />
+          <Select id="filter-type" label="Kind" value={type} onChange={setType} options={TYPES} className="w-full sm:w-48" />
+          <Select id="filter-status" label="Status" value={status} onChange={setStatus} options={STATUSES} className="w-full sm:w-64" />
         </FilterBar>
 
         {loading && !data ? (

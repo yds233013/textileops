@@ -1,0 +1,111 @@
+# Render Blueprint for a hosted TextileOps demo.
+#
+#   Render dashboard → New → Blueprint → select this repository.
+#
+# Three services and a database:
+#
+#   textileops-web     public   Next.js; the only thing a visitor reaches. It
+#                               proxies /api/v1 to the API over the private
+#                               network (apps/web/app/api/v1/[...path]/route.ts).
+#   textileops-api     private  FastAPI. No public address at all.
+#   textileops-worker  private  Background jobs; also reloads the demo daily.
+#   textileops-db               Managed PostgreSQL 16.
+#
+# This file configures a DEMO: DEMO_MODE=true, one-click sign-in, fictional
+# data that reloads itself each day. For a real business, remove DEMO_MODE,
+# set PILOT_MODE=true, create real users, and read docs/DEPLOYMENT.md first.
+#
+# Plans and prices change; check them in the dashboard before creating. Private
+# services and background workers are not available on free plans.
+
+databases:
+  - name: textileops-db
+    databaseName: textileops
+    user: textileops
+    postgresMajorVersion: "16"
+    plan: basic-256mb
+
+services:
+  - type: web
+    name: textileops-web
+    runtime: docker
+    rootDir: apps/web
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /login
+    autoDeploy: false
+    envVars:
+      - key: API_HOSTPORT
+        fromService:
+          name: textileops-api
+          type: pserv
+          property: hostport
+
+  - type: pserv
+    name: textileops-api
+    runtime: docker
+    rootDir: apps/api
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    autoDeploy: false
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: textileops-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DEMO_MODE
+        value: "true"
+      - key: PILOT_MODE
+        value: "false"
+      # The rule engine, deliberately: a public demo must not let any visitor
+      # spend on a model account. To demonstrate the live model, set
+      # AI_PROVIDER=auto and ANTHROPIC_API_KEY on the API and worker only —
+      # never on the web service — and watch the spend.
+      - key: AI_PROVIDER
+        value: stub
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://textileops-web.onrender.com
+      - key: WEB_CONCURRENCY
+        value: "2"
+
+  - type: worker
+    name: textileops-worker
+    runtime: docker
+    rootDir: apps/api
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: ./scripts/start-worker.sh
+    plan: starter
+    autoDeploy: false
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: textileops-db
+          property: connectionString
+      - key: JWT_SECRET
+        fromService:
+          name: textileops-api
+          type: pserv
+          envVarKey: JWT_SECRET
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DEMO_MODE
+        value: "true"
+      - key: PILOT_MODE
+        value: "false"
+      - key: AI_PROVIDER
+        value: stub
+      - key: ANTHROPIC_API_KEY
+        sync: false

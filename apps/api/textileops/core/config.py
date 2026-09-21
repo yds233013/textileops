@@ -101,6 +101,20 @@ class Settings(BaseSettings):
     demo_mode: bool = False
     demo_account_email: str = "owner@kaveriknits.example"
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _psycopg_driver(cls, v: object) -> object:
+        """Managed Postgres hands out `postgres://` URLs; SQLAlchemy needs a driver.
+
+        Without this, pasting the URL a hosting provider gives you fails at the
+        first query with an error about a missing `psycopg2` package.
+        """
+        if isinstance(v, str):
+            for prefix in ("postgres://", "postgresql://"):
+                if v.startswith(prefix):
+                    return "postgresql+psycopg://" + v[len(prefix):]
+        return v
+
     @field_validator("cors_origins", "allowed_upload_extensions", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:

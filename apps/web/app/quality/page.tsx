@@ -13,27 +13,13 @@ import {
   PageHeader,
   Segmented,
   StatusPill,
-  type Tone,
 } from "@/components/ui";
 import { dateTime, humanise, num } from "@/lib/format";
 import { useApi } from "@/lib/hooks";
+import { measurementVerdict } from "@/components/quality";
 import type { Inspection, Measurement } from "@/lib/types";
 
 type Filter = "" | "reject" | "rework" | "conditional_pass" | "pass" | "pending";
-
-/**
- * One measurement, stated no more strongly than it was taken. A value against
- * a numeric band is in or out of tolerance. A visual judgement with no band is
- * the inspector's call — shown with their words, never as "passed" and never
- * as "not assessed" when it plainly was. No reading at all is "not measured",
- * which is never treated as a pass.
- */
-function measurementVerdict(m: Measurement): { label: string; tone: Tone } {
-  if (m.result === "out_of_tolerance") return { label: "Out of tolerance", tone: "bad" };
-  if (m.result === "within_tolerance") return { label: "Within tolerance", tone: "ok" };
-  if (m.observed_text || m.observed_value) return { label: "Inspector's judgement", tone: "info" };
-  return { label: "Not measured", tone: "neutral" };
-}
 
 function MeasurementRow({ m }: { m: Measurement }) {
   const verdict = measurementVerdict(m);
@@ -43,13 +29,15 @@ function MeasurementRow({ m }: { m: Measurement }) {
       ? `target ${m.target_value !== null ? num(m.target_value) : "—"}, accept ${m.tolerance_low !== null ? num(m.tolerance_low) : "—"}–${m.tolerance_high !== null ? num(m.tolerance_high) : "—"}`
       : null;
   return (
-    <li className="grid grid-cols-[7rem_minmax(0,1fr)_auto] items-baseline gap-x-3 py-1.5 text-[13px]">
+    <li className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 py-1.5 text-[13px] sm:grid-cols-[7rem_minmax(0,1fr)_auto]">
       <span className="font-medium text-ink-700">{m.label ?? (m.kind.length <= 3 ? m.kind.toUpperCase() : humanise(m.kind))}</span>
       <span className="min-w-0 text-ink-900">
         {observed ?? <span className="text-ink-400">No reading recorded</span>}
         {band && <span className="ml-2 text-xs text-ink-500">({band})</span>}
       </span>
-      <Badge tone={verdict.tone}>{verdict.label}</Badge>
+      <span className="col-start-2 sm:col-start-auto">
+        <Badge tone={verdict.tone}>{verdict.label}</Badge>
+      </span>
     </li>
   );
 }
@@ -59,7 +47,7 @@ function Split({ inspection }: { inspection: Inspection }) {
   const ok = (Number(inspection.accepted_quantity) / total) * 100;
   const bad = (Number(inspection.rejected_quantity) / total) * 100;
   return (
-    <div className="w-60">
+    <div className="w-full sm:w-60">
       <div className="flex h-2 overflow-hidden rounded-full bg-ink-100">
         <span className="bg-good-solid" style={{ width: `${ok}%` }} />
         <span className="bg-critical-solid" style={{ width: `${bad}%` }} />

@@ -112,3 +112,11 @@ def test_simulation_is_never_written_into_a_real_production_database():
         assert settings.simulation_allowed is True
     with configured(environment="production", demo_mode=True, enable_simulation=False):
         assert settings.simulation_allowed is False
+
+
+@pytest.mark.parametrize(
+    "given",
+    ["postgres://u:p@db:5432/x", "postgresql://u:p@db:5432/x", "postgresql+psycopg://u:p@db:5432/x"],
+)
+def test_a_hosting_providers_database_url_is_given_the_right_driver(given):
+    assert Settings(database_url=given).database_url == "postgresql+psycopg://u:p@db:5432/x"

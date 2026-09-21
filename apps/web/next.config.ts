@@ -8,11 +8,25 @@ const config: NextConfig = {
   // This app has its own lockfile inside a monorepo; pin the trace root so the
   // build does not guess at a parent directory.
   outputFileTracingRoot: __dirname,
-  // The API is a separate service; the browser talks to it directly using
-  // NEXT_PUBLIC_API_BASE_URL. No secrets are ever exposed to the client.
-  env: {
-    NEXT_PUBLIC_API_BASE_URL:
-      process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1",
+  // A self-contained server bundle for the container image.
+  output: "standalone",
+  // The API is a separate service. In a deployment the browser calls /api/v1 on
+  // this origin and app/api/v1/[...path]/route.ts forwards it to API_ORIGIN at
+  // request time. No secret is ever exposed to the client: the model provider's
+  // key exists only in the API's environment.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+        ],
+      },
+    ];
   },
 };
 

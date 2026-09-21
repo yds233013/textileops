@@ -62,7 +62,7 @@ export default function OrdersPage() {
               { value: "on_track", label: "On track", count: counts.on_track ?? 0 },
             ]}
           />
-          <div className="relative w-56">
+          <div className="relative w-full sm:w-56">
             <label htmlFor="order-search" className="sr-only">
               Search by order number
             </label>

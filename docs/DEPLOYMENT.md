@@ -1,66 +1,150 @@
 # Deployment and operations
 
-## What has to run
+Two shapes are supported and both are tested with the same images:
 
-| Process | Command | Notes |
-|---|---|---|
-| API | `uvicorn textileops.api.main:app` | Stateless; scale horizontally |
-| Worker | `python -m textileops.workers.runner` | At least one; safe to run several |
-| Web | `next start` | Stateless |
-| PostgreSQL | 14+ | The only infrastructure dependency |
+* **A hosted demo** — fictional data, one-click sign-in, reloads itself daily.
+  This is what `render.yaml` and `infra/docker-compose.prod.yml` configure.
+* **A real business** — pilot mode, real users with passwords, no demo mode.
+  Same images, different environment. See *From demo to pilot* below.
 
-No broker, no cache. Background jobs use a PostgreSQL-backed queue, so several
-workers can run concurrently without coordinating — `FOR UPDATE SKIP LOCKED`
-ensures a job is claimed once.
+## Architecture
+
+```
+            browser
+               │  HTTPS (TLS terminated by the platform)
+               ▼
+      ┌─────────────────┐   /api/v1/*  (server-side proxy,
+      │  web  (Next.js) │───────────────  app/api/v1/[...path]/route.ts)
+      └─────────────────┘                      │
+                                               ▼  private network
+      ┌─────────────────┐            ┌──────────────────┐
+      │ worker (Python) │            │   api (FastAPI)  │
+      └────────┬────────┘            └────────┬─────────┘
+               └──────────────┬───────────────┘
+                              ▼
+                       PostgreSQL 16
+```
+
+| Process | Image | Command | Notes |
+|---|---|---|---|
+| web | `apps/web/Dockerfile` | `node server.js` | The only public service. Proxies `/api/v1` to the API, so there is no CORS and no build-time API URL. |
+| api | `apps/api/Dockerfile` | `scripts/start-api.sh` | Runs migrations under an advisory lock, then uvicorn. Stateless; scale horizontally. |
+| worker | `apps/api/Dockerfile` | `scripts/start-worker.sh` | Same image as the API. Several may run: jobs are claimed with `FOR UPDATE SKIP LOCKED`. |
+| database | PostgreSQL 16 | — | The only infrastructure dependency. No broker, no cache. |
+
+**The model provider's key never reaches the browser.** It is set on the API
+and worker only. The web service has no secrets at all — it knows where the
+API is, and nothing else. The frontend bundle is checked for key material in
+the verification step below.
+
+## Recommended hosting: Render
+
+Chosen because the architecture maps onto it one-to-one — a public web service,
+a *private* API service, a background worker and managed PostgreSQL — from a
+private GitHub repository, with TLS, health checks and zero-downtime deploys
+included. `render.yaml` describes all of it.
+
+1. Push the repository to GitHub (it is already at the private repo).
+2. Render dashboard → **New → Blueprint** → connect GitHub → select the repo.
+   Render reads `render.yaml` and shows the four resources.
+3. Leave `ANTHROPIC_API_KEY` empty for a public demo (see *AI on a public demo*).
+4. **Apply.** The database is created, the API migrates and loads the demo
+   company on first boot, and the web service becomes available at its
+   `onrender.com` address.
+5. Open the web URL. The sign-in page offers **Explore the demo**.
+6. If the web service's URL differs from `https://textileops-web.onrender.com`,
+   update `CORS_ORIGINS` on the API to match (the proxy makes CORS unused in
+   practice; the setting is kept correct so it is never wide open).
+
+A custom domain is added on the web service only.
+
+Things to check in the dashboard before applying, because they change: the
+plan names and prices in `render.yaml`, and that private services and workers
+are available on the plan you choose (they are not on free plans).
+
+### Alternatives
+
+* **One VM with Docker** — `infra/docker-compose.prod.yml` runs the same four
+  pieces on a single host. Put Caddy or nginx in front of port 3000 for TLS.
+  Cheapest; you own patching and backups.
+* **Fly.io / Railway** — both run the two Dockerfiles as-is. Create a Postgres,
+  an API app (internal only), a worker from the same image with
+  `./scripts/start-worker.sh`, and a web app with `API_ORIGIN` pointing at the
+  API's internal address.
+* **Vercel for the web** — possible (the proxy is a standard route handler),
+  but the API would then need a public address and the worker a separate home.
+  Not recommended: it splits one system across two platforms for no gain.
 
 ## Environment
 
-Every variable is documented in `.env.example`. The ones that matter in
-production:
+Every variable is documented in `.env.example`. The ones that matter here:
 
-| Variable | Notes |
-|---|---|
-| `ENVIRONMENT` | Set to `production`. This disables seeding and simulation, and forces JSON logging. |
-| `DATABASE_URL` | `postgresql+psycopg://…` |
-| `JWT_SECRET` | **Generate one.** `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `JWT_EXPIRE_MINUTES` | 720 by default; lower it if token theft is a concern |
-| `CORS_ORIGINS` | Comma-separated allowlist of frontend origins |
-| `ANTHROPIC_API_KEY` | Optional. Without it the deterministic rule engine runs. |
-| `AI_MODEL` | Defaults to `claude-opus-5` |
-| `UPLOAD_DIR` | Needs persistent storage — source documents are never deleted |
-| `MAX_UPLOAD_BYTES` | 20 MB default |
-| `LOG_JSON` | Forced on in production |
+| Variable | Service | Notes |
+|---|---|---|
+| `ENVIRONMENT` | api, worker | `production`. Forces JSON logs and turns on the start-up safety checks. |
+| `DATABASE_URL` | api, worker | A provider's `postgres://…` URL works as given; the driver is added automatically. |
+| `JWT_SECRET` | api, worker | **Generated**, never the example value — the API refuses to start in production with it. |
+| `DEBUG` | api, worker | `false`. The API refuses to start in production with it on. |
+| `CORS_ORIGINS` | api | The web origin. A wildcard is refused in production. |
+| `DEMO_MODE` | api, worker | `true` for a demo: one-click sign-in, daily reload, simulation allowed. |
+| `PILOT_MODE` | api, worker | `true` for a real business. **Cannot be combined with `DEMO_MODE`** — the API refuses to start. |
+| `AI_PROVIDER` | api, worker | `stub`, `anthropic` or `auto`. |
+| `ANTHROPIC_API_KEY` | api, worker | Optional. Never on the web service. |
+| `API_ORIGIN` / `API_HOSTPORT` | web | Where the proxy sends `/api/v1`. A full URL, or a private-network `host:port`. |
+| `UPLOAD_DIR` | api, worker | Persistent storage for source documents in a real deployment. |
 
-Business thresholds are configuration, not code, so the business can tune them:
-`ORDER_AT_RISK_BUFFER_DAYS`, `SUPPLIER_DELAY_WARN_DAYS`,
-`SHIPMENT_DELAY_GRACE_DAYS`, `PO_LATE_GRACE_DAYS`.
+Business thresholds are configuration, not code: `ORDER_AT_RISK_BUFFER_DAYS`,
+`SUPPLIER_DELAY_WARN_DAYS`, `SHIPMENT_DELAY_GRACE_DAYS`, `PO_LATE_GRACE_DAYS`.
 
-The frontend needs `NEXT_PUBLIC_API_BASE_URL` **at build time** — it is baked
-into the bundle.
+### What refuses to start
 
-## Migrations
+The API checks its own configuration before serving (`core/config.py`), because
+a document telling a person to remember something is not a control:
 
-```bash
-cd apps/api
-.venv/bin/alembic upgrade head        # apply
-.venv/bin/alembic current             # check
-.venv/bin/alembic downgrade -1        # roll back one
+* production with the development `JWT_SECRET`, with `DEBUG` on, or with a
+  wildcard CORS origin;
+* `DEMO_MODE` and `PILOT_MODE` together, in any environment — a password-free
+  owner sign-in on a real business's data.
+
+## The demo, specifically
+
+* **Sign-in.** `DEMO_MODE` enables `POST /auth/demo-login`, which signs in as
+  the seeded owner. With demo mode off it answers exactly as a wrong password.
+* **Freshness.** The data is written relative to "today". The worker checks
+  every ten minutes and reloads it once per UTC day
+  (`textileops demo-refresh`). The API also loads it on first boot.
+* **Safety of the reload.** It truncates every table, so it runs only in demo
+  mode, never alongside pilot mode, and never on a database the demo seed did
+  not create (it looks for the seed's own `demo.seeded` audit marker, and
+  refuses any database that has orders without one).
+* **Shared state.** Every visitor is the same owner on the same data. An
+  approval one visitor makes, another sees, until the next daily reload.
+* **Uploads** go to the container's disk and vanish on redeploy. Harmless for a
+  demo; a real deployment needs a persistent disk or object storage.
+
+### AI on a public demo
+
+`render.yaml` sets `AI_PROVIDER=stub`. Every investigation on the public demo
+is produced by the deterministic rule engine and labelled as such in the UI.
+
+Setting a real key on a public demo would let any visitor start model calls on
+your account by pressing *Investigate*. There is no per-visitor rate limit.
+Enable it only for a demo you are presenting yourself, and watch the spend.
+
+## From demo to pilot
+
+Same images. Change the environment on the API and worker:
+
+```
+DEMO_MODE=false
+PILOT_MODE=true
 ```
 
-Never change a model without a migration. The initial migration drops its
-native enum types on downgrade — Alembic does not do this automatically, and
-without it a downgrade/upgrade cycle fails on "type already exists". Keep that
-pattern for any migration that adds an enum.
-
-Migrations always read `DATABASE_URL` from application settings, so they cannot
-be pointed at a different database than the app by accident.
-
-## First deploy
+Then, against an **empty** database (never the demo's):
 
 ```bash
-alembic upgrade head
-# create the first user (no seed data in production):
-python - <<'PY'
+python -m textileops.cli migrate
+python - <<'PYTHON'
 from textileops.core.db import session_scope
 from textileops.core.security import hash_password
 from textileops.models.org import User
@@ -68,12 +152,25 @@ from textileops.models.enums import UserRole
 with session_scope() as s:
     s.add(User(email="you@example.com", full_name="Your Name",
                role=UserRole.OWNER, password_hash=hash_password("…")))
-PY
+PYTHON
 ```
 
-Then load real reference data — customers, suppliers, materials, fabric
-specifications and bills of material — before any transactional data. Coverage
-and risk are only as good as the BOM.
+Load reference data before any transactional data — customers, suppliers
+(with their email addresses: they are how a message is authenticated as coming
+from them), materials, fabric specifications, and bills of material. See
+`docs/PILOT_DATA_REQUIREMENTS.md`. Coverage and risk are only as good as the BOM.
+
+## Migrations
+
+```bash
+python -m textileops.cli migrate      # apply, with an advisory lock (what start-api.sh runs)
+.venv/bin/alembic current             # check
+.venv/bin/alembic downgrade -1        # roll back one
+```
+
+Never change a model without a migration. Migrations that add a native enum
+must drop it on downgrade. Migrations read `DATABASE_URL` from application
+settings, so they cannot be pointed at a different database than the app.
 
 ## Operating it
 

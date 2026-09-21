@@ -1,0 +1,8 @@
+node_modules
+.next
+tsconfig.tsbuildinfo
+tests
+scripts
+.env
+.env.*
+!.env.local.example

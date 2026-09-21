@@ -82,7 +82,7 @@ export default function PurchaseOrdersPage() {
               { value: "all", label: "All", count: all.length },
             ]}
           />
-          <div className="relative w-56">
+          <div className="relative w-full sm:w-56">
             <label htmlFor="po-search" className="sr-only">
               Search by PO number
             </label>

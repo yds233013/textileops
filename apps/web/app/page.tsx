@@ -548,10 +548,10 @@ function RecentActivity() {
       ) : (
         <ul className="divide-y divide-ink-100">
           {data.slice(0, 8).map((event) => (
-            <li key={event.id} className="flex items-baseline gap-3 px-4 py-2 text-[13px]">
-              <span className="w-24 shrink-0 text-xs text-ink-500 tnum">{ago(event.occurred_at)}</span>
+            <li key={event.id} className="flex min-w-0 items-baseline gap-3 px-4 py-2 text-[13px]">
+              <span className="w-20 shrink-0 text-xs text-ink-500 tnum">{ago(event.occurred_at)}</span>
               <ActorTag event={event} />
-              <span className="w-44 shrink-0 truncate text-xs text-ink-600">{actorName(event)}</span>
+              <span className="hidden w-44 shrink-0 truncate text-xs text-ink-600 sm:block">{actorName(event)}</span>
               <span className="min-w-0 flex-1 truncate text-ink-800" title={event.summary}>
                 {event.summary}
               </span>

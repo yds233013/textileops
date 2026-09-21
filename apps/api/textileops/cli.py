@@ -30,6 +30,47 @@ def _cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_migrate(_args: argparse.Namespace) -> int:
+    """Apply migrations, one process at a time.
+
+    Every API instance runs this on start. An advisory lock makes the second
+    and later instances wait for the first and then find nothing to do, rather
+    than racing to create the same tables.
+    """
+    from alembic.config import Config
+    from sqlalchemy import text
+
+    from alembic import command
+    from textileops.core.db import engine
+
+    config = Config(str(_alembic_ini()))
+    # A session-level lock, held on its own connection while Alembic runs on
+    # another: concurrent callers queue here instead of racing the DDL.
+    with engine.connect() as lock:
+        lock.execute(text("SELECT pg_advisory_lock(727274)"))
+        try:
+            command.upgrade(config, "head")
+        finally:
+            lock.execute(text("SELECT pg_advisory_unlock(727274)"))
+    print("migrations: at head")
+    return 0
+
+
+def _alembic_ini():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parent.parent / "alembic.ini"
+
+
+def _cmd_demo_refresh(args: argparse.Namespace) -> int:
+    from textileops.seed.refresh import refresh_demo_if_stale
+
+    with session_scope() as session:
+        result = refresh_demo_if_stale(session, force=args.force)
+    print(json.dumps({"refreshed": result.refreshed, "reason": result.reason}))
+    return 0
+
+
 def _cmd_recompute(_args: argparse.Namespace) -> int:
     from textileops.services import exception_engine, production
 
@@ -164,6 +205,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     check.set_defaults(func=_cmd_check)
 
+    sub.add_parser(
+        "migrate", help="Apply database migrations (safe to run concurrently)."
+    ).set_defaults(func=_cmd_migrate)
+    refresh = sub.add_parser(
+        "demo-refresh", help="Reload the demo if it was last loaded before today (demo mode only)."
+    )
+    refresh.add_argument("--force", action="store_true", help="Reload even if already fresh.")
+    refresh.set_defaults(func=_cmd_demo_refresh)
     sub.add_parser("recompute", help="Re-derive every exception.").set_defaults(
         func=_cmd_recompute
     )

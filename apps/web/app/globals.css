@@ -27,6 +27,12 @@
 }
 
 @layer components {
+  /* Grid items default to min-width: auto, so a wide table inside one grows
+     the whole column — and the page — instead of scrolling in its own box.
+     Every grid in this app wants the opposite. */
+  .grid > * {
+    min-width: 0;
+  }
   .skeleton {
     background: linear-gradient(90deg, #eceef2 0px, #f6f7f9 160px, #eceef2 320px);
     background-size: 800px 100%;

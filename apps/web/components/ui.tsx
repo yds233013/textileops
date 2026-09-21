@@ -825,7 +825,7 @@ export function Select({
 /** A row of filters above a table. */
 export function FilterBar({ children, summary }: { children: ReactNode; summary?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-2.5">
+    <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-2.5">
       {children}
       {summary && <div className="ml-auto text-xs text-ink-500">{summary}</div>}
     </div>
@@ -845,7 +845,8 @@ export function Segmented<T extends string>({
   label: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-md bg-ink-100 p-0.5">
+    // Scrolls sideways on a narrow screen rather than pushing the page wider.
+    <div role="radiogroup" aria-label={label} className="inline-flex max-w-full overflow-x-auto rounded-md bg-ink-100 p-0.5">
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -883,7 +884,7 @@ export function Tabs<T extends string>({
   label: string;
 }) {
   return (
-    <div role="tablist" aria-label={label} className="flex gap-4 border-b border-ink-150">
+    <div role="tablist" aria-label={label} className="flex max-w-full gap-4 overflow-x-auto border-b border-ink-150">
       {tabs.map((tab) => {
         const active = tab.value === value;
         return (

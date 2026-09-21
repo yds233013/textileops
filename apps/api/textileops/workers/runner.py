@@ -16,6 +16,32 @@ from textileops.workers.queue import claim, registered_tasks, run_job, worker_id
 logger = get_logger("textileops.worker")
 _running = True
 
+#: How often a demo deployment checks whether its data is from a previous day.
+DEMO_REFRESH_EVERY_SECONDS = 600
+
+
+def _maybe_refresh_demo() -> None:
+    """Keep a demo deployment's data current without a separate cron service.
+
+    Only ever does anything in demo mode, and `refresh_demo_if_stale` refuses
+    any database the demo seed did not create. See textileops/seed/refresh.py.
+    """
+    if not settings.demo_mode:
+        return
+    from textileops.seed.refresh import refresh_demo_if_stale
+
+    session = SessionLocal()
+    try:
+        result = refresh_demo_if_stale(session)
+        session.commit()
+        if result.refreshed:
+            logger.info("demo_refreshed_by_worker")
+    except Exception as exc:
+        session.rollback()
+        logger.error("demo_refresh_failed", error=str(exc))
+    finally:
+        session.close()
+
 
 def _stop(signum: int, _frame: FrameType | None) -> None:
     global _running
@@ -31,7 +57,11 @@ def main() -> int:
         "worker_started", identity=worker_identity(), tasks=registered_tasks()
     )
 
+    next_demo_check = 0.0
     while _running:
+        if settings.demo_mode and time.monotonic() >= next_demo_check:
+            _maybe_refresh_demo()
+            next_demo_check = time.monotonic() + DEMO_REFRESH_EVERY_SECONDS
         session = SessionLocal()
         try:
             # One at a time: claiming a batch marks every job in it RUNNING on

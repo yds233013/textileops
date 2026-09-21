@@ -37,6 +37,7 @@ from textileops.models.catalog import FabricSpec, FabricSpecComponent, Material
 from textileops.models.enums import (
     ActionType,
     Currency,
+    EntityType,
     MovementType,
     ProductionStage,
     ProductionStatus,
@@ -67,10 +68,13 @@ from textileops.services import (
     quality,
     shipments,
 )
+from textileops.services.audit import record_audit
 from textileops.services.quality import MeasurementInput
 
 D = Decimal
 
+
+DEMO_SEEDED_ACTION = "demo.seeded"
 
 #: The day the seed treats as "today", fixed when seeding starts. Historical
 #: steps run with the clock frozen at the moment they happened (so the audit
@@ -92,8 +96,13 @@ def _moment(offset_days: int, hour: int = 10) -> dt.datetime:
 def seed_demo_business(session: Session, *, reset: bool = False) -> dict[str, Any]:
     global _SEED_TODAY
     _SEED_TODAY = clock.today()
-    if settings.is_production:
+    # A hosted demo is a production environment holding fictional data. That is
+    # the one production database seeding may touch, and demo mode is how it
+    # says so — demo mode refuses to start alongside pilot mode, which is how a
+    # real business's database says so.
+    if settings.is_production and not settings.demo_mode:
         raise ConflictError("Seed data must never be loaded into production.")
+    settings.assert_consistent()
 
     if reset:
         _wipe(session)
@@ -129,6 +138,20 @@ def seed_demo_business(session: Session, *, reset: bool = False) -> dict[str, An
     session.flush()
 
     workflow = _scenario_e_decisions(session, users)
+    session.flush()
+
+    # The marker a scheduled refresh looks for. A database without it was not
+    # made by this seed, and is never reset automatically.
+    record_audit(
+        session,
+        action=DEMO_SEEDED_ACTION,
+        entity_type=EntityType.USER,
+        entity_id=users["owner"].id,
+        summary="Demo data loaded: Kaveri Knit Fabrics, a fictional knitting mill.",
+        actor_type="system",
+        actor_label="demo-seed",
+        after={"seeded_for": _SEED_TODAY.isoformat()},
+    )
     session.flush()
 
     return {

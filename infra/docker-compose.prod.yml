@@ -1,0 +1,83 @@
+# Production-shaped stack on a single host — the alternative to render.yaml.
+#
+#   JWT_SECRET=$(python3 -c "import secrets;print(secrets.token_urlsafe(48))") \
+#   POSTGRES_PASSWORD=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))") \
+#     docker compose -f infra/docker-compose.prod.yml up -d --build
+#
+# Put a TLS-terminating proxy (Caddy, nginx, a cloud load balancer) in front of
+# port 3000. Only the web service is published; the API and the database are
+# reachable only on the compose network.
+#
+# As written this runs the DEMO (DEMO_MODE=true). For a real business set
+# DEMO_MODE=false and PILOT_MODE=true — the API refuses to start with both on.
+name: textileops-prod
+
+x-api-env: &api-env
+  DATABASE_URL: postgresql+psycopg://textileops:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/textileops
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+  ENVIRONMENT: production
+  DEBUG: "false"
+  DEMO_MODE: ${DEMO_MODE:-true}
+  PILOT_MODE: ${PILOT_MODE:-false}
+  AI_PROVIDER: ${AI_PROVIDER:-stub}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  CORS_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost:3000}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: textileops
+      POSTGRES_USER: textileops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U textileops -d textileops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ../apps/api
+    restart: unless-stopped
+    environment: *api-env
+    volumes:
+      - uploads:/app/var/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: ../apps/api
+    restart: unless-stopped
+    command: ["./scripts/start-worker.sh"]
+    environment: *api-env
+    # The image's health check calls the API's HTTP endpoint; a worker serves
+    # none. Healthy here means the worker process is alive.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - uploads:/app/var/uploads
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build: ../apps/web
+    restart: unless-stopped
+    environment:
+      API_ORIGIN: http://api:8000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  uploads:

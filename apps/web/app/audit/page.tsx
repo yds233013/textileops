@@ -72,7 +72,7 @@ export default function AuditPage() {
               { value: "system", label: "Engine and system" },
             ]}
           />
-          <div className="w-64">
+          <div className="w-full sm:w-64">
             <label htmlFor="audit-action" className="sr-only">
               Filter by kind of event
             </label>
