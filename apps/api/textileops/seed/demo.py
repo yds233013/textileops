@@ -32,12 +32,16 @@ from textileops.core.security import hash_password
 from textileops.core.units import UnitOfMeasure, convert
 from textileops.ingestion import pipeline
 from textileops.models import Base
+from textileops.models.actions import ActionProposal
 from textileops.models.catalog import FabricSpec, FabricSpecComponent, Material
 from textileops.models.enums import (
+    ActionType,
     Currency,
     MovementType,
     ProductionStage,
     ProductionStatus,
+    ProposalOrigin,
+    ProposalStatus,
     PurchaseOrderStatus,
     QCMeasurementKind,
     QCOutcome,
@@ -45,6 +49,7 @@ from textileops.models.enums import (
     ShipmentStatus,
     SourceChannel,
 )
+from textileops.models.exceptions import OperationalException
 from textileops.models.inventory import InventoryLot
 from textileops.models.org import Customer, Supplier, User
 from textileops.models.procurement import PurchaseOrder, PurchaseOrderLine
@@ -52,9 +57,11 @@ from textileops.models.production import ProductionBatch
 from textileops.models.sales import SalesOrder, SalesOrderLine
 from textileops.seed import catalogue
 from textileops.services import (
+    actions,
     clock,
     exception_engine,
     inventory,
+    investigation,
     procurement,
     production,
     quality,
@@ -65,8 +72,15 @@ from textileops.services.quality import MeasurementInput
 D = Decimal
 
 
+#: The day the seed treats as "today", fixed when seeding starts. Historical
+#: steps run with the clock frozen at the moment they happened (so the audit
+#: trail reads in the order things occurred), and offsets must not be measured
+#: from that frozen moment or every date would shift twice.
+_SEED_TODAY: dt.date | None = None
+
+
 def _day(offset: int) -> dt.date:
-    return clock.today() + dt.timedelta(days=offset)
+    return (_SEED_TODAY or clock.today()) + dt.timedelta(days=offset)
 
 
 def _moment(offset_days: int, hour: int = 10) -> dt.datetime:
@@ -76,6 +90,8 @@ def _moment(offset_days: int, hour: int = 10) -> dt.datetime:
 
 
 def seed_demo_business(session: Session, *, reset: bool = False) -> dict[str, Any]:
+    global _SEED_TODAY
+    _SEED_TODAY = clock.today()
     if settings.is_production:
         raise ConflictError("Seed data must never be loaded into production.")
 
@@ -111,6 +127,9 @@ def seed_demo_business(session: Session, *, reset: bool = False) -> dict[str, An
     engine = exception_engine.run(session)
     session.flush()
 
+    workflow = _scenario_e_decisions(session, users)
+    session.flush()
+
     return {
         "users": len(users),
         "customers": len(customers),
@@ -121,6 +140,7 @@ def seed_demo_business(session: Session, *, reset: bool = False) -> dict[str, An
         "purchase_orders": len(pos),
         "production_batches": len(batches),
         "exceptions": engine.summary(),
+        "decisions": workflow,
         "demo_login": {
             "email": "owner@kaveriknits.example",
             "password": settings.demo_password,
@@ -335,14 +355,15 @@ def _seed_supplier_history(
         )
         session.add(line)
         session.flush()
-        procurement.receive(
-            session,
-            line,
-            accepted_quantity=quantity,
-            received_at=_moment(-received_ago, hour=12),
-            supplier_document_ref=f"{supplier_code}/DC/{index:04d}",
-            note="Historical receipt.",
-        )
+        with clock.frozen(_moment(-received_ago, hour=12)):
+            procurement.receive(
+                session,
+                line,
+                accepted_quantity=quantity,
+                received_at=_moment(-received_ago, hour=12),
+                supplier_document_ref=f"{supplier_code}/DC/{index:04d}",
+                note="Historical receipt.",
+            )
         # The stock from these historical orders was consumed long ago; opening
         # balances below are the real starting position.
         for lot in session.scalars(
@@ -582,14 +603,15 @@ def _seed_purchase_orders(
 
     # PO-00001 was received in full, on time.
     completed = out["PO-00001"]
-    procurement.receive(
-        session,
-        completed.lines[0],
-        accepted_quantity=D("120"),
-        received_at=_moment(-5, hour=14),
-        supplier_document_ref="VDC/DC/4471",
-        note="Received in full.",
-    )
+    with clock.frozen(_moment(-5, hour=14)):
+        procurement.receive(
+            session,
+            completed.lines[0],
+            accepted_quantity=D("120"),
+            received_at=_moment(-5, hour=14),
+            supplier_document_ref="VDC/DC/4471",
+            note="Received in full.",
+        )
     session.flush()
     return out
 
@@ -634,25 +656,30 @@ def _seed_production(
     ) in BATCHES:
         order = orders[order_number]
         line = sorted(order.lines, key=lambda line_: line_.line_no)[line_index]
-        batch = production.create_batch(
-            session,
-            code=code,
-            fabric_spec_id=specs[spec_code].id,
-            planned_quantity=quantity,
-            unit=unit,
-            planned_start=_day(start_offset),
-            planned_completion=_day(start_offset + days),
-            stage=stage,
-            sales_order_line_id=line.id,
-            priority=order.priority,
-            notes=note,
-        )
-        if status in (ProductionStatus.SCHEDULED, ProductionStatus.IN_PROGRESS):
-            production.schedule_batch(session, batch)
+        # Planned a couple of days before it was due to start, not "now": the
+        # history must not show a batch created after it started running.
+        planned_on = min(_moment(start_offset - 2, hour=9), clock.now())
+        with clock.frozen(planned_on):
+            batch = production.create_batch(
+                session,
+                code=code,
+                fabric_spec_id=specs[spec_code].id,
+                planned_quantity=quantity,
+                unit=unit,
+                planned_start=_day(start_offset),
+                planned_completion=_day(start_offset + days),
+                stage=stage,
+                sales_order_line_id=line.id,
+                priority=order.priority,
+                notes=note,
+            )
+            if status in (ProductionStatus.SCHEDULED, ProductionStatus.IN_PROGRESS):
+                production.schedule_batch(session, batch)
         if status == ProductionStatus.IN_PROGRESS:
             # Scenario F starts late on purpose; the others start on plan.
             actual_start = _moment(start_offset + (4 if code == "B-1050" else 0), hour=8)
-            production.start_batch(session, batch, at=actual_start)
+            with clock.frozen(actual_start):
+                production.start_batch(session, batch, at=actual_start)
         out[code] = batch
     session.flush()
     return out
@@ -690,7 +717,8 @@ def _scenario_a_supplier_delay(
         supplier_id=supplier.id,
         received_at=_moment(-1, hour=17),
     )
-    pipeline.process_message(session, message)
+    with clock.frozen(_moment(-1, hour=17)):
+        pipeline.process_message(session, message)
 
     # The same message forwarded again the next morning: it must be recognised as
     # a duplicate and must not move the date a second time.
@@ -703,7 +731,8 @@ def _scenario_a_supplier_delay(
         supplier_id=supplier.id,
         received_at=_moment(0, hour=8),
     )
-    pipeline.process_message(session, duplicate)
+    with clock.frozen(min(_moment(0, hour=8), clock.now())):
+        pipeline.process_message(session, duplicate)
     session.flush()
 
 
@@ -761,15 +790,191 @@ def _scenario_b_qc_rejection(
 def _scenario_d_partial_receipt(session: Session, pos: dict[str, PurchaseOrder]) -> None:
     """D: 6,000 kg of the 10,000 kg poly-cotton yarn arrived, and it is now overdue."""
     line = pos["PO-00005"].lines[0]
-    procurement.receive(
-        session,
-        line,
-        accepted_quantity=D("6000"),
-        received_at=_moment(-4, hour=11),
-        supplier_document_ref="CCT/DC/22187",
-        note="Part consignment — supplier confirmed balance would follow.",
-    )
+    with clock.frozen(_moment(-4, hour=11)):
+        procurement.receive(
+            session,
+            line,
+            accepted_quantity=D("6000"),
+            received_at=_moment(-4, hour=11),
+            supplier_document_ref="CCT/DC/22187",
+            note="Part consignment — supplier confirmed balance would follow.",
+        )
     session.flush()
+
+
+def _scenario_e_decisions(session: Session, users: dict[str, User]) -> dict[str, int]:
+    """E: the approval workflow, exercised the way the product exercises it.
+
+    Nothing here is written directly into the proposal tables. Investigations
+    run through `investigation.investigate_exception` and create proposals by
+    the same gate a live run uses; approvals go through `actions.approve`, which
+    records who decided and executes. Two are left waiting for a person, one is
+    approved and carried out, and one is approved as a drafted message that a
+    person still has to send — so every state of the workflow is on screen.
+
+    Investigations are always run on the deterministic stub here, whatever the
+    deployment is configured with: a demo reset must be free, repeatable and
+    offline, and every such investigation is labelled as rule-based in the UI.
+    Claiming a model wrote them would be exactly the fabrication the product is
+    built to avoid.
+    """
+    from textileops.ai import provider as provider_module
+
+    by_type: dict[str, list[OperationalException]] = {}
+    for exception in session.scalars(
+        select(OperationalException).order_by(OperationalException.priority_score.desc())
+    ).all():
+        by_type.setdefault(exception.exception_type.value, []).append(exception)
+
+    def first(kind: str, needle: str | None = None) -> OperationalException | None:
+        for exception in by_type.get(kind, []):
+            if needle is None or needle in exception.title:
+                return exception
+        return None
+
+    previous = settings.ai_provider
+    settings.ai_provider = "stub"
+    provider_module.reset_provider_cache()
+    counts = {"investigated": 0, "pending": 0, "executed": 0, "awaiting_send": 0}
+    try:
+        for kind, needle, who in (
+            ("QC_FAILURE", None, "quality"),
+            ("PO_LATE", None, "procurement"),
+            ("ORDER_AT_RISK", "SO-1002", "operations"),
+            ("SUPPLIER_DELAY", None, "procurement"),
+        ):
+            target = first(kind, needle)
+            if target is None:
+                continue
+            investigation.investigate_exception(session, target, user_id=users[who].id)
+            counts["investigated"] += 1
+        session.flush()
+
+        # The overdue PO: the owner approves the drafted chaser. TextileOps never
+        # sends mail, so the outcome is a draft awaiting a person — the honest
+        # end state for an external action.
+        po_late = first("PO_LATE")
+        if po_late is not None:
+            for proposal in session.scalars(
+                select(ActionProposal).where(ActionProposal.exception_id == po_late.id)
+            ).all():
+                if proposal.status == ProposalStatus.PENDING_APPROVAL and (
+                    proposal.execution_mode.value == "external_draft"
+                ):
+                    actions.approve(
+                        session,
+                        proposal,
+                        user_id=users["owner"].id,
+                        note="Yes — and ask whether the balance can come in two lots.",
+                    )
+                    counts["awaiting_send"] += 1
+                    break
+
+        # A production delay the production head re-sequences: an internal
+        # action, approved and carried out.
+        delay = first("PRODUCTION_DELAY", "B-1050")
+        batch = (
+            session.get(ProductionBatch, delay.production_batch_id)
+            if delay is not None and delay.production_batch_id is not None
+            else None
+        )
+        if delay is not None and batch is not None and batch.priority > 2:
+            proposal = actions.create_proposal(
+                session,
+                action_type=ActionType.CHANGE_PRODUCTION_PRIORITY,
+                title=f"Move {batch.code} up to priority 2 on the knitting floor",
+                rationale=(
+                    f"{batch.code} started four days late and carries SO-1007 for Lyra "
+                    "Fashion House. It is sitting behind stock knitting with no customer "
+                    "attached; raising it to priority 2 lets it take the next free "
+                    "machine without displacing a customer order."
+                ),
+                payload={"production_batch_id": str(batch.id), "priority": 2},
+                origin=ProposalOrigin.HUMAN,
+                exception_id=delay.id,
+                created_by_user_id=users["production"].id,
+            )
+            actions.approve(
+                session,
+                proposal,
+                user_id=users["owner"].id,
+                note="Agreed. Lyra's date still holds if it moves this week.",
+            )
+            counts["executed"] += 1
+
+        # Proposals raised by people, waiting for someone else to approve them.
+        # A proposal a person authored cannot be approved by that same person —
+        # these show the separation of duties, not just the queue.
+        at_risk = first("ORDER_AT_RISK", "SO-1002")
+        if at_risk is not None and at_risk.customer_id and at_risk.sales_order_id:
+            actions.create_proposal(
+                session,
+                action_type=ActionType.NOTIFY_CUSTOMER,
+                title="Tell Northwind the interlock is running about 12 days late",
+                rationale=(
+                    "SO-1002 now finishes about 12 days after the promised date because "
+                    "the first run failed its shade check and is being remade. Northwind "
+                    "should hear it from us before their own date passes."
+                ),
+                payload={
+                    "recipient_kind": "customer",
+                    "recipient_id": str(at_risk.customer_id),
+                    "sales_order_id": str(at_risk.sales_order_id),
+                },
+                origin=ProposalOrigin.HUMAN,
+                exception_id=at_risk.id,
+                created_by_user_id=users["operations"].id,
+                draft_subject="SO-1002 — revised delivery for the royal blue interlock",
+                draft_body=(
+                    "Dear Dale,\n\n"
+                    "I want to let you know early that part of your royal blue interlock "
+                    "order (SO-1002) did not pass our shade inspection: rolls 7–18 came out "
+                    "greyer than your approved swatch, so we are re-dyeing that quantity "
+                    "rather than send it.\n\n"
+                    "The replacement is scheduled now. We will confirm a firm dispatch date "
+                    "once dyeing is complete; our current estimate is about twelve days "
+                    "after the original date. The rolls that passed are packed and can "
+                    "travel ahead if a part shipment helps you.\n\n"
+                    "I am sorry for the delay. Please let me know if a part shipment is "
+                    "useful.\n\nRegards,\nDivya Narayanan\nKaveri Knit Fabrics"
+                ),
+            )
+        shortage = first("MATERIAL_SHORTAGE", "30s")
+        if shortage is not None and shortage.material_id is not None:
+            supplier = session.scalar(select(Supplier).where(Supplier.code == "SUP-002"))
+            if supplier is not None:
+                actions.create_proposal(
+                    session,
+                    action_type=ActionType.RAISE_PURCHASE_ORDER,
+                    title="Top up 30s carded yarn: 2,000 kg from Coimbatore Cotton Traders",
+                    rationale=(
+                        "30s carded is short by 1,942.5 kg for three planned batches even "
+                        "after PO-00003 arrives. Coimbatore quoted a 10-day lead time; a "
+                        "2,000 kg top-up covers the gap with a small margin."
+                    ),
+                    payload={
+                        "supplier_id": str(supplier.id),
+                        "material_id": str(shortage.material_id),
+                        "quantity": "2000",
+                        "unit": "kg",
+                        "needed_by": str(_day(10)),
+                    },
+                    origin=ProposalOrigin.HUMAN,
+                    exception_id=shortage.id,
+                    created_by_user_id=users["procurement"].id,
+                )
+        session.flush()
+        counts["pending"] = len(
+            session.scalars(
+                select(ActionProposal.id).where(
+                    ActionProposal.status == ProposalStatus.PENDING_APPROVAL
+                )
+            ).all()
+        )
+    finally:
+        settings.ai_provider = previous
+        provider_module.reset_provider_cache()
+    return counts
 
 
 def _seed_shipments(
