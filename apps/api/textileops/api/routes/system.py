@@ -8,6 +8,15 @@ from sqlalchemy import func, select, text
 
 from textileops.api.deps import CurrentUser, DbSession
 from textileops.core.config import settings
+from textileops.models.actions import ActionProposal
+from textileops.models.enums import (
+    ACTIVE_EXCEPTION_STATUSES,
+    ProposalStatus,
+    ReconciliationStatus,
+    Severity,
+)
+from textileops.models.exceptions import OperationalException
+from textileops.models.intake import ReconciliationItem
 from textileops.models.platform import Job
 from textileops.workers.queue import registered_tasks
 
@@ -21,6 +30,8 @@ class HealthResponse(BaseModel):
     ai_provider: str
     ai_model: str | None
     version: str
+    #: The data is fictional. The interface says so on every page.
+    demo_mode: bool = False
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -39,6 +50,7 @@ def health(session: DbSession) -> HealthResponse:
         ai_provider="anthropic" if settings.ai_enabled else "stub",
         ai_model=settings.ai_model if settings.ai_enabled else "deterministic-rules-v1",
         version=__version__,
+        demo_mode=settings.demo_mode,
     )
 
 
@@ -161,4 +173,39 @@ def queue_status(session: DbSession, _user: CurrentUser) -> QueueStatus:
         succeeded=counts.get("succeeded", 0),
         failed=counts.get("failed", 0),
         dead=counts.get("dead", 0),
+    )
+
+
+class AttentionCounts(BaseModel):
+    """What the navigation badges say. Four COUNT queries, nothing else."""
+
+    exceptions: int
+    critical: int
+    approvals: int
+    reconciliation: int
+
+
+@router.get("/system/counts", response_model=AttentionCounts)
+def attention_counts(session: DbSession, _user: CurrentUser) -> AttentionCounts:
+    active = OperationalException.status.in_(ACTIVE_EXCEPTION_STATUSES)
+    return AttentionCounts(
+        exceptions=session.scalar(select(func.count(OperationalException.id)).where(active)) or 0,
+        critical=session.scalar(
+            select(func.count(OperationalException.id)).where(
+                active, OperationalException.severity == Severity.CRITICAL
+            )
+        )
+        or 0,
+        approvals=session.scalar(
+            select(func.count(ActionProposal.id)).where(
+                ActionProposal.status == ProposalStatus.PENDING_APPROVAL
+            )
+        )
+        or 0,
+        reconciliation=session.scalar(
+            select(func.count(ReconciliationItem.id)).where(
+                ReconciliationItem.status == ReconciliationStatus.OPEN
+            )
+        )
+        or 0,
     )

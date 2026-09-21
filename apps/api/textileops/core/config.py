@@ -90,6 +90,16 @@ class Settings(BaseSettings):
 
     # --- Demo / simulation ---
     enable_simulation: bool = True
+    #: A hosted demonstration on fictional data. Enables one-click sign-in as the
+    #: seeded owner account, so a link can be sent to someone who has never
+    #: seen the product without also sending them a password.
+    #:
+    #: It is a door with no lock, so it may only exist where there is nothing
+    #: real behind it. Pilot mode is how an operator says "this is a real
+    #: business's data"; the two refuse to run together (see
+    #: `assert_consistent`).
+    demo_mode: bool = False
+    demo_account_email: str = "owner@kaveriknits.example"
 
     @field_validator("cors_origins", "allowed_upload_extensions", mode="before")
     @classmethod
@@ -131,6 +141,16 @@ class Settings(BaseSettings):
         if problems:
             raise RuntimeError(
                 "Refusing to start in production:\n  - " + "\n  - ".join(problems)
+            )
+
+    def assert_consistent(self) -> None:
+        """Refuse combinations that are unsafe in any environment."""
+        if self.demo_mode and self.pilot_mode:
+            raise RuntimeError(
+                "Refusing to start: DEMO_MODE and PILOT_MODE are both on. Demo mode "
+                "lets anyone with the link sign in as the owner without a password; "
+                "pilot mode means this database holds a real business's data. "
+                "Turn one of them off."
             )
 
     @property

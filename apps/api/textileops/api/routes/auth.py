@@ -57,6 +57,58 @@ def login(payload: LoginRequest, session: DbSession) -> LoginResponse:
     )
 
 
+class DemoInfo(BaseModel):
+    enabled: bool
+    email: str | None = None
+    full_name: str | None = None
+    role: str | None = None
+
+
+def _demo_user(session: DbSession) -> User | None:
+    if not settings.demo_mode:
+        return None
+    user = session.scalar(
+        select(User).where(User.email == settings.demo_account_email.lower())
+    )
+    return user if user is not None and user.is_active else None
+
+
+@router.get("/demo", response_model=DemoInfo)
+def demo_info(session: DbSession) -> DemoInfo:
+    """Whether one-click demo sign-in is available, and as whom.
+
+    Deliberately public: the login screen needs to know before anyone has
+    signed in. It reveals nothing unless demo mode is on.
+    """
+    user = _demo_user(session)
+    if user is None:
+        return DemoInfo(enabled=False)
+    return DemoInfo(
+        enabled=True, email=user.email, full_name=user.full_name, role=user.role.value
+    )
+
+
+@router.post("/demo-login", response_model=LoginResponse)
+def demo_login(session: DbSession) -> LoginResponse:
+    """Sign in as the seeded demo account, with no password.
+
+    Only when DEMO_MODE is on, which cannot coexist with PILOT_MODE. Anything
+    else is answered exactly as a wrong password would be.
+    """
+    user = _demo_user(session)
+    if user is None:
+        raise AuthError("Demo sign-in is not available.")
+    user.last_login_at = clock.now()
+    session.commit()
+    return LoginResponse(
+        access_token=create_access_token(str(user.id), role=user.role.value),
+        expires_in_minutes=settings.jwt_expire_minutes,
+        user=UserOut(
+            id=user.id, email=user.email, full_name=user.full_name, role=user.role.value
+        ),
+    )
+
+
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser) -> UserOut:
     return UserOut(id=user.id, email=user.email, full_name=user.full_name, role=user.role.value)

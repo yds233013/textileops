@@ -408,3 +408,19 @@ def test_the_order_list_shows_open_orders_unless_asked_otherwise(
         f"{PREFIX}/orders", params={"include_closed": "true"}, headers=auth
     ).json()
     assert "SO-DONE" in {item["number"] for item in everything["items"]}
+
+
+def test_navigation_counts_agree_with_the_lists_they_summarise(client, auth, session):
+    """A badge that says 3 above a list of 5 is a badge nobody trusts again."""
+    counts = client.get(f"{PREFIX}/system/counts", headers=auth)
+    assert counts.status_code == 200, counts.text
+    body = counts.json()
+    exceptions = client.get(f"{PREFIX}/exceptions", headers=auth).json()
+    assert body["exceptions"] == exceptions["total"]
+    assert body["critical"] == exceptions["counts_by_severity"]["critical"]
+    pending = client.get(f"{PREFIX}/proposals", params={"status": "pending_approval"}, headers=auth)
+    assert body["approvals"] == len(pending.json())
+
+
+def test_navigation_counts_need_a_session(client):
+    assert client.get(f"{PREFIX}/system/counts").status_code == 401

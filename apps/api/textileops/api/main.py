@@ -55,6 +55,7 @@ def create_app() -> FastAPI:
 
     # Fail loudly at startup rather than quietly serving a forgeable token.
     settings.assert_safe_for_production()
+    settings.assert_consistent()
 
     app = FastAPI(
         title="TextileOps API",

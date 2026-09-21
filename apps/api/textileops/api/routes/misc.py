@@ -15,6 +15,7 @@ from textileops.api.deps import ApproverUser, CurrentUser, DbSession
 from textileops.core.errors import NotFoundError
 from textileops.models.enums import ShipmentStatus
 from textileops.models.logistics import Shipment
+from textileops.models.org import User
 from textileops.models.platform import AuditEvent
 from textileops.models.sales import SalesOrder, SalesOrderLine
 from textileops.services import clock
@@ -218,6 +219,9 @@ class AuditEventOut(BaseModel):
     after: dict[str, Any] | None
     exception_id: uuid.UUID | None
     action_proposal_id: uuid.UUID | None
+    #: The person's name, when a person did it. Looked up rather than stored,
+    #: so the record keeps pointing at the account, not at a copy of a name.
+    actor_name: str | None = None
 
 
 @router.get("/audit", response_model=list[AuditEventOut])
@@ -228,9 +232,14 @@ def audit_log(
     entity_id: uuid.UUID | None = None,
     action: str | None = None,
     actor_type: str | None = None,
+    exception_id: uuid.UUID | None = None,
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[AuditEventOut]:
     stmt = select(AuditEvent).order_by(AuditEvent.occurred_at.desc()).limit(limit)
+    if exception_id:
+        # Everything done about one exception: detection, investigation,
+        # proposals, approvals and executions all carry its id.
+        stmt = stmt.where(AuditEvent.exception_id == exception_id)
     if entity_type:
         stmt = stmt.where(AuditEvent.entity_type == entity_type)
     if entity_id:
@@ -239,6 +248,14 @@ def audit_log(
         stmt = stmt.where(AuditEvent.action.ilike(f"%{action}%"))
     if actor_type:
         stmt = stmt.where(AuditEvent.actor_type == actor_type)
+    events = list(session.scalars(stmt).all())
+    user_ids = {event.actor_user_id for event in events if event.actor_user_id}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        for user_id, full_name in session.execute(
+            select(User.id, User.full_name).where(User.id.in_(user_ids))
+        ).all():
+            names[user_id] = full_name
     return [
         AuditEventOut(
             id=event.id,
@@ -254,8 +271,9 @@ def audit_log(
             after=event.after,
             exception_id=event.exception_id,
             action_proposal_id=event.action_proposal_id,
+            actor_name=names.get(event.actor_user_id) if event.actor_user_id else None,
         )
-        for event in session.scalars(stmt).all()
+        for event in events
     ]
 
 

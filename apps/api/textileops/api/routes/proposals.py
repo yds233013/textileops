@@ -9,11 +9,14 @@ from typing import Any
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.orm import object_session
 
 from textileops.api.deps import ApproverUser, CurrentUser, DbSession
 from textileops.core.errors import NotFoundError
 from textileops.models.actions import ActionProposal
 from textileops.models.enums import ActionType, ProposalOrigin, ProposalStatus
+from textileops.models.exceptions import OperationalException
+from textileops.models.org import User
 from textileops.services import actions as action_service
 
 router = APIRouter(prefix="/proposals", tags=["proposals"])
@@ -25,6 +28,9 @@ class ApprovalOut(BaseModel):
     decided_by_user_id: uuid.UUID
     decided_at: dt.datetime
     note: str | None
+    #: Who took responsibility. An approval is a person's decision; the screen
+    #: should name them, not show an id.
+    decided_by_name: str | None = None
 
 
 class ExecutionOut(BaseModel):
@@ -58,6 +64,10 @@ class ProposalOut(BaseModel):
     executions: list[ExecutionOut]
     #: Plain-language statement of what approving will actually do.
     effect_description: str
+    created_by_user_id: uuid.UUID | None = None
+    created_by_name: str | None = None
+    exception_code: str | None = None
+    exception_title: str | None = None
 
 
 _EFFECTS: dict[str, str] = {
@@ -69,8 +79,32 @@ _EFFECTS: dict[str, str] = {
 }
 
 
+def _names(proposal: ActionProposal) -> dict[uuid.UUID, str]:
+    session = object_session(proposal)
+    ids = {a.decided_by_user_id for a in proposal.approvals}
+    if proposal.created_by_user_id:
+        ids.add(proposal.created_by_user_id)
+    if session is None or not ids:
+        return {}
+    rows = session.execute(select(User.id, User.full_name).where(User.id.in_(ids))).all()
+    return {row[0]: row[1] for row in rows}
+
+
 def _out(proposal: ActionProposal) -> ProposalOut:
+    names = _names(proposal)
+    session = object_session(proposal)
+    exception = (
+        session.get(OperationalException, proposal.exception_id)
+        if session is not None and proposal.exception_id
+        else None
+    )
     return ProposalOut(
+        created_by_user_id=proposal.created_by_user_id,
+        created_by_name=(
+            names.get(proposal.created_by_user_id) if proposal.created_by_user_id else None
+        ),
+        exception_code=exception.code if exception is not None else None,
+        exception_title=exception.title if exception is not None else None,
         id=proposal.id,
         code=proposal.code,
         exception_id=proposal.exception_id,
@@ -93,6 +127,7 @@ def _out(proposal: ActionProposal) -> ProposalOut:
                 id=approval.id,
                 decision=approval.decision.value,
                 decided_by_user_id=approval.decided_by_user_id,
+                decided_by_name=names.get(approval.decided_by_user_id),
                 decided_at=approval.decided_at,
                 note=approval.note,
             )
