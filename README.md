@@ -72,7 +72,14 @@ Then open <http://localhost:3000> and sign in:
 | `quality@kaveriknits.example` | `textileops` | quality |
 | `viewer@kaveriknits.example` | `textileops` | read-only |
 
-The password comes from `DEMO_PASSWORD`; seeding refuses to run in production.
+The password comes from `DEMO_PASSWORD`; seeding refuses to run in production
+unless the deployment is a declared demo.
+
+**Demo mode.** With `DEMO_MODE=true` the sign-in page offers *Explore the demo*,
+which signs in as the owner without a password — the way to send someone a link.
+It refuses to run alongside `PILOT_MODE`, so it can never exist on a real
+business's data. A hosted demo reloads itself once a day; see
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ### Before real data
 
@@ -130,6 +137,11 @@ It is tuned so that six situations are live the moment you open it:
 | E | A healthy order with nothing wrong |
 | F | A late production batch that the order's buffer absorbs |
 
+And the decisions around them, made through the real approval workflow:
+investigations that proposed actions, proposals raised by named people waiting
+for someone else to approve them, one internal action approved and carried
+out, and one drafted supplier email approved and waiting for a person to send.
+
 `docs/DEMO.md` walks through each one.
 
 ### Watching it react
@@ -155,6 +167,17 @@ Runs backend lint, type checking and tests; the AI evaluation suite; a data
 integrity check; frontend type checking, lint and tests; and a production
 frontend build.
 
+With the stack running in demo mode, `npm run e2e` in `apps/web` loads every
+screen at desktop, laptop and phone widths and fails on a console error or a
+page that scrolls sideways.
+
+## Deploying it
+
+`render.yaml` deploys the demo to Render: a public web service, a private API,
+a worker and PostgreSQL. `infra/docker-compose.prod.yml` runs the same images
+on one host. Both are described, with what refuses to start and why, in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 ---
 
 ## Documentation
@@ -168,4 +191,5 @@ frontend build.
 | [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md) | Where AI is used, where it is not, and the boundary |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Trust boundaries, uploads, prompt injection, least privilege |
 | [`docs/DEMO.md`](docs/DEMO.md) | A guided tour of the seeded scenarios |
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Environment, migrations, operations |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Hosting, environment, the demo, migrations, operations |
+| [`docs/UI_AUDIT.md`](docs/UI_AUDIT.md) | What the interface got wrong before the design system |

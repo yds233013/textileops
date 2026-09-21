@@ -112,6 +112,26 @@ quietly gives a real business wrong numbers, so treat each as a hard rule.
     the investigation recommended nothing or whether its recommendation was
     refused, and never assert the flattering one.
 
+20. **The interface uses the design system, not one-off styling.** Primitives
+    live in `components/ui.tsx`; words for API codes in `lib/labels.ts`;
+    numbers and dates through `lib/format.ts` (day-first, grouped, never
+    rounded). Provenance is visual: a calculated fact, quoted third-party text
+    and a model's interpretation are styled differently (`ProvenanceTag`), and
+    rule-engine output is never labelled as AI. Backend prose — exception
+    titles, evidence, audit lines — goes through `services/prose.py`; machine
+    fields stay ISO.
+
+21. **Demo mode and pilot mode never coexist.** `DEMO_MODE` means fictional
+    data: password-free owner sign-in, a daily reload that truncates every
+    table, simulation in production. `settings.assert_consistent()` refuses to
+    start with both on, and the reload also refuses any database the demo seed
+    did not create. Do not weaken either check to make a deployment convenient.
+
+22. **The browser never talks to the API directly in a deployment.** It calls
+    `/api/v1` on the web origin, and `app/api/v1/[...path]/route.ts` proxies to
+    `API_ORIGIN`/`API_HOSTPORT` at request time. Nothing secret is ever given
+    to the web service — the model key belongs to the API and worker only.
+
 ---
 
 ## Layout
@@ -210,6 +230,8 @@ cd apps/api
 .venv/bin/python -m textileops.cli recompute
 .venv/bin/python -m textileops.cli simulate supplier_delay
 .venv/bin/python -m textileops.cli check          # integrity, read-only, --json for CI
+.venv/bin/python -m textileops.cli migrate        # apply migrations under an advisory lock
+.venv/bin/python -m textileops.cli demo-refresh   # demo mode only: reload if older than today
 .venv/bin/python -m textileops.evals.runner       # AI evaluations (offline)
 
 # Benchmarking. Never against the demo database — point DATABASE_URL at a
