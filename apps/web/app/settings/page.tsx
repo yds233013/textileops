@@ -8,6 +8,7 @@ import {
   Loading,
   PageHeader,
 } from "@/components/ui";
+import { plural } from "@/lib/format";
 import { useApi } from "@/lib/hooks";
 import type { Settings } from "@/lib/types";
 
@@ -64,24 +65,24 @@ export default function SettingsPage() {
           items={[
             {
               term: "Order risk buffer",
-              value: `${data.order_at_risk_buffer_days} days`,
+              value: plural(data.order_at_risk_buffer_days, "day"),
               hint: "Below this much slack an order is put on watch.",
             },
             {
               term: "Supplier delay threshold",
-              value: `${data.supplier_delay_warn_days} days`,
+              value: plural(data.supplier_delay_warn_days, "day"),
               hint: "A revised ETA beyond this is raised as a supplier delay.",
             },
             {
               term: "Shipment delivery grace",
-              value: `${data.shipment_delay_grace_days} days`,
+              value: plural(data.shipment_delay_grace_days, "day"),
               hint: "Allowed slack before an undelivered shipment is flagged.",
             },
-            { term: "Environment", value: data.environment },
+            { term: "Environment", value: data.environment.charAt(0).toUpperCase() + data.environment.slice(1) },
             {
               term: "Simulation",
               value: data.simulation_enabled ? "Enabled" : "Disabled",
-              hint: "Never available in production.",
+              hint: "Writes invented events, so never against a real business's records.",
             },
           ]}
         />
@@ -95,7 +96,10 @@ export default function SettingsPage() {
               term: "Accepted file types",
               value: data.allowed_upload_extensions.join(", "),
             },
-            { term: "Background tasks", value: data.worker_tasks.join(", ") },
+            {
+              term: "Background tasks",
+              value: data.worker_tasks.map((t) => t.replace(/_/g, " ")).join(" · "),
+            },
           ]}
         />
       </Card>

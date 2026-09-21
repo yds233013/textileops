@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   DefinitionList,
   EmptyState,
   ErrorState,
@@ -26,8 +28,10 @@ export default function BatchDetailPage() {
   const { data, error, loading, reload } = useApi<BatchDetail>(`/production/batches/${id}`);
   const inspections = useApi<Inspection[]>("/quality/inspections", { batch_id: id });
 
+  const [confirming, setConfirming] = useState<"schedule" | "start" | "complete" | null>(null);
   const act = useAction(async (action: string) => {
     await apiFetch(`/production/batches/${id}/actions`, { body: { action } });
+    setConfirming(null);
     reload();
   });
 
@@ -48,18 +52,18 @@ export default function BatchDetailPage() {
         actions={
           <>
             {canSchedule && (
-              <Button onClick={() => act.run("schedule")} disabled={act.pending}>
+              <Button onClick={() => setConfirming("schedule")} disabled={act.pending}>
                 Schedule
               </Button>
             )}
             {canStart && (
-              <Button onClick={() => act.run("start")} disabled={act.pending}>
+              <Button onClick={() => setConfirming("start")} disabled={act.pending}>
                 Start
               </Button>
             )}
             {canComplete && (
-              <Button variant="primary" onClick={() => act.run("complete")} disabled={act.pending}>
-                Complete
+              <Button variant="primary" onClick={() => setConfirming("complete")} disabled={act.pending}>
+                Mark complete
               </Button>
             )}
           </>
@@ -215,6 +219,27 @@ export default function BatchDetailPage() {
           </ol>
         )}
       </Card>
-    </>
+          <ConfirmDialog
+        open={confirming !== null}
+        title={
+          confirming === "complete"
+            ? `Mark ${data.code} complete`
+            : confirming === "start"
+              ? `Start ${data.code}`
+              : `Schedule ${data.code}`
+        }
+        confirmLabel={confirming === "complete" ? "Mark complete" : confirming === "start" ? "Start" : "Schedule"}
+        pending={act.pending}
+        onCancel={() => setConfirming(null)}
+        onConfirm={() => confirming && act.run(confirming)}
+        body={
+          confirming === "complete"
+            ? "The batch closes and its materials are issued from stock — yarn, dye and chemicals leave the ledger. This cannot be undone from here."
+            : confirming === "start"
+              ? "The batch is recorded as running from now, and the plan reads it as started."
+              : "The batch is committed to the production plan and its materials stay reserved for it."
+        }
+      />
+</>
   );
 }

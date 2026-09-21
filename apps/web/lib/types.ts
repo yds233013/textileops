@@ -212,6 +212,7 @@ export interface PurchaseOrder {
   notes: string | null;
   total_ordered_lines: number;
   is_partially_received: boolean;
+  items?: { material_name: string; ordered_quantity: string; received_quantity: string; unit: string }[];
 }
 
 export interface Receipt {

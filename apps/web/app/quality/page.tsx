@@ -1,156 +1,163 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { IconShield } from "@/components/icons";
 import {
   Badge,
   Card,
   EmptyState,
   ErrorState,
+  FilterBar,
   Loading,
   PageHeader,
-  Select,
+  Segmented,
   StatusPill,
-  Table,
-  Td,
+  type Tone,
 } from "@/components/ui";
-import { dateTime, humanise, quantity } from "@/lib/format";
+import { dateTime, humanise, num } from "@/lib/format";
 import { useApi } from "@/lib/hooks";
 import type { Inspection, Measurement } from "@/lib/types";
 
-const OUTCOMES = [
-  { value: "", label: "All outcomes" },
-  { value: "reject", label: "Rejected" },
-  { value: "rework", label: "Rework" },
-  { value: "conditional_pass", label: "Conditional pass" },
-  { value: "pass", label: "Passed" },
-  { value: "pending", label: "Pending" },
-];
+type Filter = "" | "reject" | "rework" | "conditional_pass" | "pass" | "pending";
 
-function MeasurementRow({ measurement }: { measurement: Measurement }) {
-  const observed =
-    measurement.observed_text ??
-    (measurement.observed_value !== null
-      ? `${measurement.observed_value}${measurement.unit_text ? ` ${measurement.unit_text}` : ""}`
-      : "—");
-  const tolerance =
-    measurement.tolerance_low !== null || measurement.tolerance_high !== null
-      ? `${measurement.tolerance_low ?? "—"} to ${measurement.tolerance_high ?? "—"}`
-      : "judged by the inspector";
+/**
+ * One measurement, stated no more strongly than it was taken. A value against
+ * a numeric band is in or out of tolerance. A visual judgement with no band is
+ * the inspector's call — shown with their words, never as "passed" and never
+ * as "not assessed" when it plainly was. No reading at all is "not measured",
+ * which is never treated as a pass.
+ */
+function measurementVerdict(m: Measurement): { label: string; tone: Tone } {
+  if (m.result === "out_of_tolerance") return { label: "Out of tolerance", tone: "bad" };
+  if (m.result === "within_tolerance") return { label: "Within tolerance", tone: "ok" };
+  if (m.observed_text || m.observed_value) return { label: "Inspector's judgement", tone: "info" };
+  return { label: "Not measured", tone: "neutral" };
+}
+
+function MeasurementRow({ m }: { m: Measurement }) {
+  const verdict = measurementVerdict(m);
+  const observed = m.observed_text ?? (m.observed_value !== null ? `${num(m.observed_value)}${m.unit_text ? ` ${m.unit_text}` : ""}` : null);
+  const band =
+    m.tolerance_low !== null || m.tolerance_high !== null
+      ? `target ${m.target_value !== null ? num(m.target_value) : "—"}, accept ${m.tolerance_low !== null ? num(m.tolerance_low) : "—"}–${m.tolerance_high !== null ? num(m.tolerance_high) : "—"}`
+      : null;
   return (
-    <li className="flex flex-wrap items-baseline gap-x-2 text-xs">
-      <span className="font-medium text-ink-800">
-        {measurement.label ?? humanise(measurement.kind)}
+    <li className="grid grid-cols-[7rem_minmax(0,1fr)_auto] items-baseline gap-x-3 py-1.5 text-[13px]">
+      <span className="font-medium text-ink-700">{m.label ?? (m.kind.length <= 3 ? m.kind.toUpperCase() : humanise(m.kind))}</span>
+      <span className="min-w-0 text-ink-900">
+        {observed ?? <span className="text-ink-400">No reading recorded</span>}
+        {band && <span className="ml-2 text-xs text-ink-500">({band})</span>}
       </span>
-      <span className="text-ink-700">{observed}</span>
-      <span className="text-ink-500">
-        (target {measurement.target_value ?? "—"}, tolerance {tolerance})
-      </span>
-      <Badge
-        tone={
-          measurement.result === "out_of_tolerance"
-            ? "bad"
-            : measurement.result === "within_tolerance"
-              ? "ok"
-              : "neutral"
-        }
-      >
-        {humanise(measurement.result)}
-      </Badge>
+      <Badge tone={verdict.tone}>{verdict.label}</Badge>
     </li>
   );
 }
 
+function Split({ inspection }: { inspection: Inspection }) {
+  const total = Number(inspection.inspected_quantity) || 1;
+  const ok = (Number(inspection.accepted_quantity) / total) * 100;
+  const bad = (Number(inspection.rejected_quantity) / total) * 100;
+  return (
+    <div className="w-60">
+      <div className="flex h-2 overflow-hidden rounded-full bg-ink-100">
+        <span className="bg-good-solid" style={{ width: `${ok}%` }} />
+        <span className="bg-critical-solid" style={{ width: `${bad}%` }} />
+      </div>
+      <div className="mt-1.5 flex justify-between text-xs tnum">
+        <span className="text-good-text">
+          {num(inspection.accepted_quantity)} {inspection.unit} accepted
+        </span>
+        <span className={Number(inspection.rejected_quantity) > 0 ? "font-medium text-critical-text" : "text-ink-400"}>
+          {num(inspection.rejected_quantity)} rejected
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function QualityPage() {
-  const [outcome, setOutcome] = useState("");
-  const { data, error, loading, reload } = useApi<Inspection[]>("/quality/inspections", {
-    outcome,
-  });
+  const [filter, setFilter] = useState<Filter>("");
+  const { data, error, loading, reload } = useApi<Inspection[]>("/quality/inspections");
+  const all = useMemo(() => data ?? [], [data]);
+  const count = (o: string) => all.filter((i) => i.outcome === o).length;
+  const shown = useMemo(() => (filter ? all.filter((i) => i.outcome === filter) : all), [all, filter]);
 
   return (
     <>
       <PageHeader
         title="Quality"
-        description="Inspections and their consequences. A failure quarantines stock and changes what
-          the customer can be promised."
+        description="Every inspection and what it did. Rejected cloth leaves the sellable pool; accepted cloth is released; a pending inspection is never treated as a pass."
       />
 
-      <Card className="mb-4">
-        <div className="max-w-xs">
-          <Select
-            id="qc-outcome"
+      <Card flush>
+        <FilterBar summary={data ? `${shown.length} ${shown.length === 1 ? "inspection" : "inspections"}` : undefined}>
+          <Segmented<Filter>
             label="Outcome"
-            value={outcome}
-            onChange={setOutcome}
-            options={OUTCOMES}
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { value: "", label: "All", count: all.length },
+              { value: "reject", label: "Rejected", count: count("reject") },
+              { value: "rework", label: "Rework", count: count("rework") },
+              { value: "conditional_pass", label: "Conditional", count: count("conditional_pass") },
+              { value: "pass", label: "Passed", count: count("pass") },
+              { value: "pending", label: "Awaiting verdict", count: count("pending") },
+            ]}
           />
-        </div>
-      </Card>
+        </FilterBar>
 
-      <Card title="Inspections">
         {loading && !data ? (
-          <Loading />
+          <Loading rows={3} />
         ) : error ? (
-          <ErrorState error={error} onRetry={reload} />
-        ) : !data || data.length === 0 ? (
-          <EmptyState title="No inspections match" />
+          <div className="p-4">
+            <ErrorState error={error} onRetry={reload} />
+          </div>
+        ) : shown.length === 0 ? (
+          <EmptyState icon={<IconShield />} title="No inspections here" description="Inspections are recorded against a production batch or a stock lot." />
         ) : (
-          <Table
-            caption="Quality inspections"
-            head={["Reference", "Batch", "Outcome", "Inspected", "Accepted", "Rejected", "Findings", "When"]}
-          >
-            {data.map((inspection) => (
-              <tr key={inspection.id}>
-                <Td className="font-mono text-xs">
-                  {inspection.code}
-                  {inspection.reinspection_of_id && (
-                    <span className="block text-ink-500">re-inspection</span>
-                  )}
-                </Td>
-                <Td>
-                  {inspection.production_batch_id ? (
-                    <Link
-                      href={`/production/${inspection.production_batch_id}`}
-                      className="font-mono text-xs text-ink-900 hover:underline"
-                    >
-                      {inspection.batch_code}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </Td>
-                <Td>
-                  <StatusPill value={inspection.outcome} />
-                </Td>
-                <Td numeric>{quantity(inspection.inspected_quantity, inspection.unit)}</Td>
-                <Td numeric>{quantity(inspection.accepted_quantity, inspection.unit)}</Td>
-                <Td numeric>
-                  {Number(inspection.rejected_quantity) > 0 ? (
-                    <span className="font-medium text-critical-text">
-                      {quantity(inspection.rejected_quantity, inspection.unit)}
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </Td>
-                <Td className="max-w-md">
-                  {inspection.notes && (
-                    <p className="text-xs text-ink-700">{inspection.notes}</p>
-                  )}
-                  {inspection.measurements.length > 0 && (
-                    <ul className="mt-1 space-y-0.5">
-                      {inspection.measurements.map((measurement, index) => (
-                        <MeasurementRow key={index} measurement={measurement} />
-                      ))}
-                    </ul>
-                  )}
-                </Td>
-                <Td className="whitespace-nowrap text-xs">
-                  {dateTime(inspection.inspected_at)}
-                </Td>
-              </tr>
+          <ul className="divide-y divide-ink-100">
+            {shown.map((inspection) => (
+              <li key={inspection.id} className="px-4 py-4">
+                <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+                  <div className="min-w-[12rem]">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-ink-950">{inspection.code}</span>
+                      <StatusPill value={inspection.outcome} />
+                    </div>
+                    <p className="mt-1 text-xs text-ink-500">
+                      {inspection.batch_code ? (
+                        <>
+                          Batch{" "}
+                          <Link href={`/production/${inspection.production_batch_id}`} className="font-medium text-ink-800 hover:text-brand-700">
+                            {inspection.batch_code}
+                          </Link>
+                        </>
+                      ) : (
+                        "Stock lot"
+                      )}{" "}
+                      · {dateTime(inspection.inspected_at)}
+                      {inspection.reinspection_of_id && " · re-inspection"}
+                    </p>
+                  </div>
+                  <Split inspection={inspection} />
+                  <p className="text-xs text-ink-500 tnum">
+                    {num(inspection.inspected_quantity)} {inspection.unit} inspected
+                  </p>
+                </div>
+                {inspection.notes && (
+                  <p className="mt-3 max-w-prose text-[13px] leading-5 text-ink-800">{inspection.notes}</p>
+                )}
+                {inspection.measurements.length > 0 && (
+                  <ul className="mt-2 max-w-3xl divide-y divide-ink-50 rounded-md border border-ink-150 px-3">
+                    {inspection.measurements.map((m, index) => (
+                      <MeasurementRow key={index} m={m} />
+                    ))}
+                  </ul>
+                )}
+              </li>
             ))}
-          </Table>
+          </ul>
         )}
       </Card>
     </>

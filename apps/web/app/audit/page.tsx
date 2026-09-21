@@ -1,106 +1,116 @@
 "use client";
 
 import { useState } from "react";
+import { actionLabel, ActorTag, actorName } from "@/components/audit";
 import {
-  Badge,
   Card,
+  Drawer,
   EmptyState,
   ErrorState,
+  FilterBar,
   Loading,
   PageHeader,
-  Select,
+  Segmented,
   Table,
   Td,
   inputClass,
 } from "@/components/ui";
-import { dateTime } from "@/lib/format";
+import { dateTime, humanise } from "@/lib/format";
 import { useApi } from "@/lib/hooks";
 import type { AuditEvent } from "@/lib/types";
 
-const ACTORS = [
-  { value: "", label: "Everyone" },
-  { value: "user", label: "People" },
-  { value: "ai", label: "AI" },
-  { value: "system", label: "System" },
-];
+type Actor = "" | "user" | "ai" | "system";
+
+function Changes({ event }: { event: AuditEvent }) {
+  const keys = Array.from(new Set([...Object.keys(event.before ?? {}), ...Object.keys(event.after ?? {})]));
+  if (keys.length === 0) return <p className="text-[13px] text-ink-500">No field-level change recorded.</p>;
+  const show = (v: unknown) => (v === null || v === undefined ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+  return (
+    <table className="w-full text-[13px]">
+      <thead>
+        <tr className="text-left text-2xs uppercase tracking-wider text-ink-500">
+          <th className="pb-1.5 font-semibold">Field</th>
+          <th className="pb-1.5 font-semibold">Before</th>
+          <th className="pb-1.5 font-semibold">After</th>
+        </tr>
+      </thead>
+      <tbody>
+        {keys.map((key) => (
+          <tr key={key} className="border-t border-ink-100 align-top">
+            <td className="py-1.5 pr-3 text-ink-600">{humanise(key)}</td>
+            <td className="break-all py-1.5 pr-3 text-ink-500">{show(event.before?.[key])}</td>
+            <td className="break-all py-1.5 font-medium text-ink-900">{show(event.after?.[key])}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 export default function AuditPage() {
-  const [actor, setActor] = useState("");
+  const [actor, setActor] = useState<Actor>("");
   const [action, setAction] = useState("");
-  const { data, error, loading, reload } = useApi<AuditEvent[]>("/audit", {
-    actor_type: actor,
-    action,
-  });
+  const [open, setOpen] = useState<AuditEvent | null>(null);
+  const { data, error, loading, reload } = useApi<AuditEvent[]>("/audit", { actor_type: actor, action, limit: 300 });
 
   return (
     <>
       <PageHeader
-        title="Audit log"
-        description="Every consequential change, who made it, and what it looked like before and
-          after."
+        title="Audit trail"
+        description="Every consequential change: what happened, who or what did it, and what it looked like before and after. Nothing here can be edited or deleted."
       />
-
-      <Card className="mb-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Select id="audit-actor" label="Actor" value={actor} onChange={setActor} options={ACTORS} />
-          <div>
+      <Card flush>
+        <FilterBar summary={data ? `${data.length} ${data.length === 1 ? "event" : "events"}${data.length >= 300 ? " (most recent)" : ""}` : undefined}>
+          <Segmented<Actor>
+            label="Who"
+            value={actor}
+            onChange={setActor}
+            options={[
+              { value: "", label: "Everyone" },
+              { value: "user", label: "People" },
+              { value: "ai", label: "Investigations" },
+              { value: "system", label: "Engine and system" },
+            ]}
+          />
+          <div className="w-64">
             <label htmlFor="audit-action" className="sr-only">
-              Filter by action
+              Filter by kind of event
             </label>
             <input
               id="audit-action"
-              type="search"
               value={action}
               onChange={(event) => setAction(event.target.value)}
-              placeholder="Action, e.g. eta_revised, approved, received…"
+              placeholder="Filter: approved, received, eta…"
               className={inputClass}
             />
           </div>
-        </div>
-      </Card>
-
-      <Card title="Events">
+        </FilterBar>
         {loading && !data ? (
-          <Loading />
+          <Loading rows={10} />
         ) : error ? (
-          <ErrorState error={error} onRetry={reload} />
+          <div className="p-4">
+            <ErrorState error={error} onRetry={reload} />
+          </div>
         ) : !data || data.length === 0 ? (
-          <EmptyState title="No audit events match" />
+          <EmptyState title="No events match" />
         ) : (
-          <Table caption="Audit events" head={["When", "Actor", "Action", "What happened", "Change"]}>
+          <Table caption="Audit events" head={["When", "Who", "What", "", ""]} align={["left", "left", "left", "left", "right"]}>
             {data.map((event) => (
-              <tr key={event.id}>
-                <Td className="whitespace-nowrap text-xs">{dateTime(event.occurred_at)}</Td>
-                <Td>
-                  <Badge
-                    tone={
-                      event.actor_type === "ai"
-                        ? "warn"
-                        : event.actor_type === "user"
-                          ? "ok"
-                          : "neutral"
-                    }
-                  >
-                    {event.actor_type}
-                  </Badge>
-                  {event.actor_label && (
-                    <span className="mt-0.5 block text-xs text-ink-500">{event.actor_label}</span>
-                  )}
+              <tr key={event.id} className="hover:bg-ink-25">
+                <Td nowrap className="w-32 text-xs text-ink-500 tnum">{dateTime(event.occurred_at)}</Td>
+                <Td nowrap className="w-56">
+                  <span className="flex items-center gap-2">
+                    <ActorTag event={event} />
+                    <span className="truncate text-[13px] text-ink-800">{actorName(event)}</span>
+                  </span>
                 </Td>
-                <Td className="font-mono text-xs">{event.action}</Td>
-                <Td className="max-w-lg text-sm text-ink-700">{event.summary}</Td>
-                <Td className="max-w-xs">
-                  {event.before || event.after ? (
-                    <details>
-                      <summary className="cursor-pointer text-xs text-ink-500">
-                        before / after
-                      </summary>
-                      <pre className="mt-1 overflow-x-auto rounded bg-ink-50 px-2 py-1 text-[11px] text-ink-600">
-                        {JSON.stringify({ before: event.before, after: event.after }, null, 2)}
-                      </pre>
-                    </details>
-                  ) : (
-                    <span className="text-xs text-ink-400">—</span>
+                <Td nowrap className="w-44 text-xs font-medium text-ink-600">{actionLabel(event.action)}</Td>
+                <Td className="text-ink-900">{event.summary}</Td>
+                <Td nowrap className="w-24">
+                  {(event.before || event.after) && (
+                    <button type="button" onClick={() => setOpen(event)} className="text-xs font-medium text-brand-700 hover:text-brand-900">
+                      Changes
+                    </button>
                   )}
                 </Td>
               </tr>
@@ -108,6 +118,26 @@ export default function AuditPage() {
           </Table>
         )}
       </Card>
+
+      <Drawer open={open !== null} title={open ? actionLabel(open.action) : ""} onClose={() => setOpen(null)}>
+        {open && (
+          <div className="space-y-4">
+            <p className="text-[14px] leading-6 text-ink-900">{open.summary}</p>
+            <dl className="grid grid-cols-2 gap-3 text-[13px]">
+              <div>
+                <dt className="text-xs text-ink-500">When</dt>
+                <dd className="text-ink-900">{dateTime(open.occurred_at)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-ink-500">Who</dt>
+                <dd className="text-ink-900">{actorName(open)}</dd>
+              </div>
+            </dl>
+            <Changes event={open} />
+            <p className="font-mono text-2xs text-ink-400">{open.action}</p>
+          </div>
+        )}
+      </Drawer>
     </>
   );
 }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { AttentionCard } from "@/components/attention";
-import { ActorTag } from "@/components/audit";
+import { ActorTag, actorName } from "@/components/audit";
 import { IconArrowRight, IconCheckCircle, IconRefresh } from "@/components/icons";
 import {
   Alert,
@@ -551,6 +551,7 @@ function RecentActivity() {
             <li key={event.id} className="flex items-baseline gap-3 px-4 py-2 text-[13px]">
               <span className="w-24 shrink-0 text-xs text-ink-500 tnum">{ago(event.occurred_at)}</span>
               <ActorTag event={event} />
+              <span className="w-44 shrink-0 truncate text-xs text-ink-600">{actorName(event)}</span>
               <span className="min-w-0 flex-1 truncate text-ink-800" title={event.summary}>
                 {event.summary}
               </span>

@@ -11,6 +11,7 @@ import {
   Loading,
   PageHeader,
   Table,
+  RowLink,
   Td,
 } from "@/components/ui";
 import { date, dateTime, humanise, percent } from "@/lib/format";
@@ -62,11 +63,11 @@ export default function SupplierDetailPage() {
             head={["Number", "Ordered", "Expected", "Status", "Late by", "Lines"]}
           >
             {data.purchase_orders.map((po) => (
-              <tr key={po.id} className="hover:bg-ink-50">
+              <RowLink key={po.id} href={`/purchase-orders/${po.id}`}>
                 <Td>
                   <Link
                     href={`/purchase-orders/${po.id}`}
-                    className="font-medium text-ink-900 hover:underline"
+                    className="font-medium text-ink-950 group-hover:text-brand-700"
                   >
                     {po.number}
                   </Link>
@@ -87,7 +88,7 @@ export default function SupplierDetailPage() {
                 </Td>
                 <Td numeric>{po.days_late > 0 ? `${po.days_late} days` : "—"}</Td>
                 <Td numeric>{po.total_ordered_lines}</Td>
-              </tr>
+              </RowLink>
             ))}
           </Table>
         )}

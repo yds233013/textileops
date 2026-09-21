@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { IconArrowRight, IconModel } from "@/components/icons";
+import { actorName } from "@/components/audit";
 import { InvestigationPanel } from "@/components/investigation";
 import {
   Badge,
@@ -352,16 +353,7 @@ export default function ExceptionDetailPage() {
                           : event.actor_type === "ai"
                             ? "info"
                             : "neutral",
-                    detail:
-                      event.actor_type === "user"
-                        ? event.actor_name ?? "A person"
-                        : event.actor_type === "ai"
-                          ? event.actor_label === "deterministic-rules-v1"
-                            ? "Investigation (rule engine)"
-                            : `Investigation (${event.actor_label ?? "model"})`
-                          : event.actor_label === "exception-engine"
-                            ? "Exception engine"
-                            : "TextileOps",
+                    detail: actorName(event),
                   }))}
                 />
               </div>

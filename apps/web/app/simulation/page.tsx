@@ -52,7 +52,7 @@ export default function SimulationPage() {
             <p className="text-sm text-ink-600">{event.description}</p>
             <div className="mt-3">
               <Button
-                variant="primary"
+                variant="secondary"
                 onClick={() => fire.run(event.key)}
                 disabled={!data.enabled || fire.pending}
               >

@@ -9,6 +9,7 @@ import {
   Loading,
   PageHeader,
   Table,
+  RowLink,
   Td,
 } from "@/components/ui";
 import { percent } from "@/lib/format";
@@ -37,11 +38,11 @@ export default function SuppliersPage() {
             head={["Supplier", "Contact", "Lead time", "On-time rate", "Open POs", "Late POs", "Flags"]}
           >
             {data.map((supplier) => (
-              <tr key={supplier.id} className="hover:bg-ink-50">
+              <RowLink key={supplier.id} href={`/suppliers/${supplier.id}`}>
                 <Td>
                   <Link
                     href={`/suppliers/${supplier.id}`}
-                    className="font-medium text-ink-900 hover:underline"
+                    className="font-medium text-ink-950 group-hover:text-brand-700"
                   >
                     {supplier.name}
                   </Link>
@@ -81,7 +82,7 @@ export default function SuppliersPage() {
                     <Badge tone="bad">{supplier.open_exception_count} open</Badge>
                   )}
                 </Td>
-              </tr>
+              </RowLink>
             ))}
           </Table>
         )}

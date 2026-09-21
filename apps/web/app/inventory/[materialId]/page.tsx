@@ -74,7 +74,7 @@ export default function MaterialCoveragePage() {
         </p>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-6">
         <Card title="Demand" subtitle="Allocated earliest-required-first.">
           {data.allocations.length === 0 ? (
             <EmptyState title="Nothing needs this material" />
