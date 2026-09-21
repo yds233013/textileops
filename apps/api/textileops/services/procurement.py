@@ -94,8 +94,8 @@ def revise_eta(
         entity_type=EntityType.PURCHASE_ORDER,
         entity_id=purchase_order.id,
         summary=(
-            f"{purchase_order.number} now expected {new_date.isoformat()} "
-            f"(was {previous.isoformat()}): {reason}"
+            f"{purchase_order.number} now expected {prose.when(new_date)} "
+            f"(was {prose.when(previous)}): {reason}"
         ),
         actor_type=actor_type,
         actor_user_id=user_id,

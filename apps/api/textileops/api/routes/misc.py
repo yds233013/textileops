@@ -318,7 +318,7 @@ def simulation_events(_user: CurrentUser) -> dict[str, Any]:
     from textileops.core.config import settings
 
     return {
-        "enabled": settings.enable_simulation and not settings.is_production,
+        "enabled": settings.simulation_allowed,
         "events": [
             {
                 "key": "supplier_delay",

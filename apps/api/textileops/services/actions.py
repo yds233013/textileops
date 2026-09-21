@@ -522,7 +522,13 @@ def execute(
         entity_type=EntityType.ACTION_PROPOSAL,
         entity_id=proposal.id,
         summary=(
-            f"{proposal.code} ({proposal.action_type.value}) → {execution.status.value}."
+            f"{proposal.code} "
+            + {
+                "succeeded": "carried out.",
+                "awaiting_external": "approved; the drafted message is waiting for a person "
+                "to send it.",
+                "failed": "could not be carried out.",
+            }.get(execution.status.value, f"{execution.status.value.replace('_', ' ')}.")
         ),
         actor_type="user" if user_id else "system",
         actor_user_id=user_id,

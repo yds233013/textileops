@@ -64,3 +64,20 @@ def test_live_model_passes_the_same_suite():
     assert report["traps_tripped"] == 0
     # A model should clear the suite it was designed against.
     assert report["passed"] >= report["scored"] - 1, report["cases"]
+
+
+def test_the_rule_engine_reads_a_filename_with_underscores_as_words():
+    """Uploads are stored as `delivery_challan.csv`; the phrase has to match."""
+    from textileops.ai.schemas import DocumentClassification
+    from textileops.ai.stub_provider import StubProvider
+    from textileops.models.enums import DocumentKind
+
+    result = StubProvider().structured(
+        workflow="classify_document",
+        system="",
+        user_content="Item,Quantity,Unit\nYarn,10,kg\n",
+        schema=DocumentClassification,
+        context={"filename": "CCT-DC-22187_delivery_challan.csv"},
+    )
+    assert result.value is not None
+    assert result.value.kind == DocumentKind.DELIVERY_CHALLAN

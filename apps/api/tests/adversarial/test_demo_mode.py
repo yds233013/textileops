@@ -98,3 +98,17 @@ def test_health_says_when_the_data_is_a_demo(client):
         assert client.get(f"{PREFIX}/health").json()["demo_mode"] is True
     with configured(demo_mode=False):
         assert client.get(f"{PREFIX}/health").json()["demo_mode"] is False
+
+
+def test_simulation_is_never_written_into_a_real_production_database():
+    """Invented events in a real business's records would be indistinguishable
+    from real ones. Only a demo deployment — fictional data, and demo mode
+    cannot run alongside pilot mode — may simulate in production."""
+    with configured(environment="production", demo_mode=False, enable_simulation=True):
+        assert settings.simulation_allowed is False
+    with configured(environment="production", demo_mode=True, pilot_mode=False, enable_simulation=True):
+        assert settings.simulation_allowed is True
+    with configured(environment="development", demo_mode=False, enable_simulation=True):
+        assert settings.simulation_allowed is True
+    with configured(environment="production", demo_mode=True, enable_simulation=False):
+        assert settings.simulation_allowed is False

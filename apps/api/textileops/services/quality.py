@@ -80,6 +80,16 @@ class QCPropagation:
     affected_sales_order_numbers: list[str]
 
 
+
+#: How a QC verdict reads in a sentence.
+_OUTCOME_WORD = {
+    "pass": "passed",
+    "reject": "rejected",
+    "rework": "sent for rework",
+    "conditional_pass": "conditional pass",
+    "pending": "awaiting a verdict",
+}
+
 def record_inspection(
     session: Session,
     *,
@@ -185,8 +195,10 @@ def record_inspection(
         action="qc.recorded",
         entity_type=EntityType.QC_INSPECTION,
         entity_id=inspection.id,
-        summary=f"QC {code} on "
-        f"{'batch' if production_batch_id else 'lot'}: {outcome.value}.",
+        summary=(
+            f"QC {code} on the {'batch' if production_batch_id else 'lot'}: "
+            f"{_OUTCOME_WORD.get(outcome.value, outcome.value)}."
+        ),
         actor_type="user" if inspector_user_id else "system",
         actor_user_id=inspector_user_id,
         after={"outcome": outcome.value, "accepted": accepted, "rejected": rejected},

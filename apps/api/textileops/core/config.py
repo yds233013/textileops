@@ -154,6 +154,16 @@ class Settings(BaseSettings):
             )
 
     @property
+    def simulation_allowed(self) -> bool:
+        """Whether invented operational events may be written.
+
+        Never into a production database of real records. A demo deployment is
+        a production *environment* holding fictional data — and demo mode
+        cannot coexist with pilot mode — so there, simulation is the point.
+        """
+        return self.enable_simulation and (not self.is_production or self.demo_mode)
+
+    @property
     def ai_enabled(self) -> bool:
         """True when a real model provider can be reached."""
         if self.ai_provider == "stub":

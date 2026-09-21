@@ -933,8 +933,10 @@ def detect_qc_failures(session: Session) -> list[Detection]:
                 exception_type=ExceptionType.QC_FAILURE,
                 severity=severity,
                 title=(
-                    f"QC {inspection.outcome.value.replace('_', ' ')} on "
-                    f"{batch.code if batch else inspection.code}"
+                    f"{batch.code if batch else inspection.code} failed QC"
+                    if inspection.outcome.value == "reject"
+                    else f"{batch.code if batch else inspection.code}: QC "
+                    f"{inspection.outcome.value.replace('_', ' ')}"
                 ),
                 summary=(
                     f"Inspection {inspection.code} on "

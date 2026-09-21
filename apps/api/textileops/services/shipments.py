@@ -21,7 +21,7 @@ from textileops.models.enums import (
 from textileops.models.inventory import InventoryLot
 from textileops.models.logistics import Shipment, ShipmentLine
 from textileops.models.sales import SalesOrder, SalesOrderLine
-from textileops.services import clock, inventory
+from textileops.services import clock, inventory, prose
 from textileops.services.audit import record_audit
 
 ZERO = Decimal("0")
@@ -271,7 +271,7 @@ def dispatch(
         action="shipment.dispatched",
         entity_type=EntityType.SHIPMENT,
         entity_id=shipment.id,
-        summary=f"Shipment {shipment.number} dispatched on {when.isoformat()}.",
+        summary=f"Shipment {shipment.number} dispatched on {prose.when(when)}.",
         actor_type="user" if user_id else "system",
         actor_user_id=user_id,
         after={"dispatch_date": when, "tracking_reference": shipment.tracking_reference},

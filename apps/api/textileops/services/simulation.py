@@ -71,10 +71,11 @@ class SimulationResult:
 
 
 def _guard() -> None:
-    if settings.is_production or not settings.enable_simulation:
+    if not settings.simulation_allowed:
         raise ConflictError(
-            "Simulation is disabled. It is a development feature and never runs in "
-            "production."
+            "Simulation is disabled. It writes invented events, so it only runs in "
+            "development or on a demo deployment of fictional data — never against "
+            "a real business's records."
         )
 
 

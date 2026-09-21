@@ -89,6 +89,13 @@ class ETAProvenanceOut(BaseModel):
     source_document_id: uuid.UUID | None
 
 
+class POItemOut(BaseModel):
+    material_name: str
+    ordered_quantity: Decimal
+    received_quantity: Decimal
+    unit: str
+
+
 class PurchaseOrderOut(BaseModel):
     id: uuid.UUID
     number: str
@@ -104,6 +111,9 @@ class PurchaseOrderOut(BaseModel):
     notes: str | None
     total_ordered_lines: int
     is_partially_received: bool
+    #: What is on order and what has arrived, per line, so the list can show
+    #: it without opening every PO. Quantities in each line's own unit.
+    items: list[POItemOut] = []
 
 
 class PurchaseOrderDetailOut(PurchaseOrderOut):
@@ -136,6 +146,15 @@ def _po_out(po: PurchaseOrder) -> PurchaseOrderOut:
         is_partially_received=any(
             0 < line.received_quantity < line.ordered_quantity for line in po.lines
         ),
+        items=[
+            POItemOut(
+                material_name=line.material.name,
+                ordered_quantity=line.ordered_quantity,
+                received_quantity=line.received_quantity,
+                unit=line.unit.value,
+            )
+            for line in sorted(po.lines, key=lambda line: line.line_no)
+        ],
     )
 
 
@@ -240,7 +259,10 @@ def list_purchase_orders(
     search: str | None = None,
     limit: int = Query(200, ge=1, le=500),
 ) -> list[PurchaseOrderOut]:
-    stmt = select(PurchaseOrder).order_by(PurchaseOrder.expected_date)
+    # Open orders first — ten closed POs from June used to head the list —
+    # then by the date we currently expect them, soonest first.
+    is_open = PurchaseOrder.status.in_(OPEN_PO_STATUSES)
+    stmt = select(PurchaseOrder).order_by(is_open.desc(), PurchaseOrder.expected_date)
     if status:
         stmt = stmt.where(PurchaseOrder.status == PurchaseOrderStatus(status))
     if supplier_id:

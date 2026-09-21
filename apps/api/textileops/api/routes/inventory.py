@@ -16,6 +16,7 @@ from textileops.models.catalog import FabricSpec, Material
 from textileops.models.inventory import InventoryLot, InventoryMovement
 from textileops.services import coverage as coverage_service
 from textileops.services import inventory as inventory_service
+from textileops.services import prose
 
 router = APIRouter(tags=["inventory"])
 
@@ -233,12 +234,13 @@ def material_coverage(
         raise NotFoundError(f"Material {material_id} not found.")
     position, result = _position(session, material)
     explanation = (
-        f"{result.available} {result.unit.value} is on site and drawable by these "
-        f"batches, plus {result.incoming} confirmed incoming, against "
-        f"{result.required} required before {result.horizon.isoformat()}. Demand is "
-        f"allocated to supply in required-by date order. 'Free to promise' "
-        f"({result.free_to_promise} {result.unit.value}) is what remains after every "
-        f"existing reservation, and is the figure to use before committing new work."
+        f"{prose.qty(result.available, result.unit)} is on site and drawable by these "
+        f"batches, plus {prose.qty(result.incoming, result.unit)} confirmed incoming, "
+        f"against {prose.qty(result.required, result.unit)} required before "
+        f"{prose.when(result.horizon)}. Demand is met in the order it is needed. "
+        f"Free to promise ({prose.qty(result.free_to_promise, result.unit)}) is what "
+        f"remains after every existing reservation — the figure to use before "
+        f"committing new work."
     )
     return CoverageOut(
         position=position,

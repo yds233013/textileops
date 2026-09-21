@@ -94,7 +94,7 @@ def read_settings(_user: CurrentUser) -> SettingsResponse:
             "once they pass the deterministic checks. Consequential actions "
             "still require approval."
         ),
-        simulation_enabled=settings.enable_simulation and not settings.is_production,
+        simulation_enabled=settings.simulation_allowed,
         ai_enabled=settings.ai_enabled,
         ai_model=settings.ai_model if settings.ai_enabled else "deterministic-rules-v1",
         order_at_risk_buffer_days=settings.order_at_risk_buffer_days,
@@ -110,10 +110,15 @@ def read_settings(_user: CurrentUser) -> SettingsResponse:
                 configured=settings.ai_enabled,
                 status="connected" if settings.ai_enabled else "not_configured",
                 detail=(
-                    f"Using {settings.ai_model}."
+                    f"Using {settings.ai_model} for extraction and read-only investigation."
                     if settings.ai_enabled
-                    else "No API key configured. TextileOps is running its deterministic "
-                    "rule engine instead; every AI-derived item is labelled as such."
+                    else (
+                        "A key is configured, but AI_PROVIDER is set to the rule engine. "
+                        if settings.anthropic_api_key
+                        else "No API key configured. "
+                    )
+                    + "TextileOps is running its deterministic rule engine; every "
+                    "AI-derived item is labelled as such."
                 ),
             ),
             IntegrationStatus(

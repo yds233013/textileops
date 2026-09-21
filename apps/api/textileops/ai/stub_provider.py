@@ -180,7 +180,10 @@ class StubProvider(AIProvider):
 
     # --- rules ------------------------------------------------------------
     def _classify(self, text: str, context: dict[str, Any]) -> DocumentClassification:
-        haystack = f"{context.get('filename', '')}\n{text}".lower()
+        # Filenames arrive with underscores and hyphens for spaces ("delivery_challan.csv");
+        # read them as words, or the filename can never match a phrase.
+        filename = str(context.get("filename", "")).replace("_", " ").replace("-", " ")
+        haystack = f"{filename}\n{text}".lower()
         best: tuple[DocumentKind, int] = (DocumentKind.UNKNOWN, 0)
         for kind, markers in _DOC_RULES:
             hits = sum(1 for marker in markers if marker in haystack)

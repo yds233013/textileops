@@ -422,7 +422,7 @@ def record_output(
         action="production.output_recorded",
         entity_type=EntityType.PRODUCTION_BATCH,
         entity_id=batch.id,
-        summary=f"Batch {batch.code} produced {good} {batch.unit.value}.",
+        summary=f"Batch {batch.code} produced {prose.qty(good, batch.unit)}.",
         actor_type="user" if user_id else "system",
         actor_user_id=user_id,
         after={"good": good, "wastage": waste, "rejected": rejected},

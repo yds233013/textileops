@@ -119,6 +119,7 @@ def seed_demo_business(session: Session, *, reset: bool = False) -> dict[str, An
     _scenario_a_supplier_delay(session, pos, suppliers)
     _scenario_b_qc_rejection(session, batches, users)
     _scenario_d_partial_receipt(session, pos)
+    _scenario_c_documents(session, users)
     _seed_shipments(session, orders, customers)
     session.flush()
 
@@ -799,6 +800,34 @@ def _scenario_d_partial_receipt(session: Session, pos: dict[str, PurchaseOrder])
             supplier_document_ref="CCT/DC/22187",
             note="Part consignment — supplier confirmed balance would follow.",
         )
+    session.flush()
+
+
+def _scenario_c_documents(session: Session, users: dict[str, User]) -> None:
+    """C: the paperwork that arrived with the part delivery, ingested for real.
+
+    A delivery challan from Coimbatore for the 6,000 kg part consignment, run
+    through the same pipeline as an upload: stored under a generated name,
+    parsed as rows by rule rather than by a model, and matched to materials.
+    It changes no stock by itself — the receipt was recorded separately, which
+    is exactly the separation the pipeline exists to keep.
+    """
+    content = (
+        b"Item,Count,Quantity,Unit,Lot,Remarks\n"
+        b"20s Poly-Cotton Yarn 65/35,20s,6000,kg,CCT-2291,Part consignment against PO-00005\n"
+        b"20s Poly-Cotton Yarn 65/35,20s,0,kg,CCT-2292,Balance 4000 kg to follow\n"
+    )
+    moment = _moment(-4, hour=12)
+    with clock.frozen(moment):
+        document = pipeline.receive_document(
+            session,
+            content=content,
+            filename="CCT-DC-22187 delivery challan.csv",
+            content_type="text/csv",
+            channel=SourceChannel.UPLOAD,
+            uploaded_by_user_id=users["procurement"].id,
+        )
+        pipeline.process_document(session, document)
     session.flush()
 
 
