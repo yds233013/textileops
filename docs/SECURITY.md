@@ -60,8 +60,13 @@ read-only by construction, not by permission check.
 
 * `.env` is git-ignored; `.env.example` documents every variable with no real
   values.
-* The Anthropic API key lives only in the API process. The browser holds a
-  bearer token and nothing else.
+* The Anthropic API key lives only in the API process. The browser holds an
+  HttpOnly session cookie — unreadable by page scripts, `Secure` in production,
+  `SameSite=Lax` — and nothing else. A cookie-authenticated write must also
+  carry the `x-textileops-client: web` header, which a cross-site page cannot
+  set without a CORS preflight the API refuses. Sign-out clears the cookie on
+  the server. Page routes redirect a visitor with no session to sign in
+  (`apps/web/middleware.ts`); every API call is still authorised by the API.
 * Structured logging redacts known-sensitive keys (`api_key`, `authorization`,
   `password`, `token`, `secret`, …) from every event before rendering.
 * `ai_call_logs` records metadata, never prompts or untrusted content.

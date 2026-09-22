@@ -1,22 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiFetch, clearSession, getToken, setSession } from "@/lib/api";
+import { ApiError, apiFetch, forgetUser, getStoredUser, rememberUser } from "@/lib/api";
 
 describe("apiFetch", () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.restoreAllMocks();
   });
-  afterEach(() => clearSession());
+  afterEach(() => forgetUser());
 
-  it("stores and reads a session", () => {
-    setSession("token-123", { id: "1", full_name: "Ops" });
-    expect(getToken()).toBe("token-123");
-    clearSession();
-    expect(getToken()).toBeNull();
+  it("keeps no credential in page storage", () => {
+    // Left behind by an earlier version that stored the token here.
+    window.localStorage.setItem("textileops.token", "leftover");
+    rememberUser({ id: "1", full_name: "Ops" });
+    expect(getStoredUser()).toEqual({ id: "1", full_name: "Ops" });
+    expect(window.localStorage.getItem("textileops.token")).toBeNull();
+    expect(JSON.stringify({ ...window.localStorage })).not.toMatch(/token|eyJ/);
   });
 
-  it("sends the bearer token when one is stored", async () => {
-    setSession("token-123", {});
+  it("sends the cookie and identifies itself, and never a bearer header", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -27,7 +28,9 @@ describe("apiFetch", () => {
 
     await apiFetch("/dashboard");
     const [, init] = fetchMock.mock.calls[0];
-    expect(init.headers.Authorization).toBe("Bearer token-123");
+    expect(init.credentials).toBe("include");
+    expect(init.headers["x-textileops-client"]).toBe("web");
+    expect(init.headers.Authorization).toBeUndefined();
   });
 
   it("puts query parameters on the URL and drops empty ones", async () => {
@@ -65,13 +68,13 @@ describe("apiFetch", () => {
     });
   });
 
-  it("clears the session on a 401", async () => {
-    setSession("stale", {});
+  it("forgets the signed-in person on a 401", async () => {
+    rememberUser({ id: "1" });
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(new Response("{}", { status: 401 })),
     );
     await expect(apiFetch("/dashboard")).rejects.toBeInstanceOf(ApiError);
-    expect(getToken()).toBeNull();
+    expect(getStoredUser()).toBeNull();
   });
 });

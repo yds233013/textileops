@@ -1,10 +1,13 @@
 /**
  * Typed client for the TextileOps API.
  *
- * The access token lives in localStorage and is sent as a bearer header. There
- * are no secrets in the browser: the API key for the model provider never
- * leaves the server.
+ * The session is an HttpOnly cookie the API sets on sign-in: no script on the
+ * page can read it, and nothing here stores a token. The only thing kept in
+ * localStorage is the signed-in person's name and role, for the sidebar. The
+ * API key for the model provider never leaves the server.
  */
+
+import { CLIENT_HEADER } from "@/lib/session";
 
 /**
  * Where the browser sends API calls. By default the same origin (`/api/v1`),
@@ -13,8 +16,9 @@
  */
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api/v1";
 
-const TOKEN_KEY = "textileops.token";
 const USER_KEY = "textileops.user";
+/** Written by versions that kept the token in page storage; removed on sight. */
+const LEGACY_TOKEN_KEY = "textileops.token";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -29,13 +33,9 @@ export class ApiError extends Error {
   }
 }
 
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function setSession(token: string, user: unknown): void {
-  window.localStorage.setItem(TOKEN_KEY, token);
+/** Remember who signed in, for display. Not a credential: the cookie is. */
+export function rememberUser(user: unknown): void {
+  window.localStorage.removeItem(LEGACY_TOKEN_KEY);
   window.localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
@@ -50,8 +50,8 @@ export function getStoredUser<T>(): T | null {
   }
 }
 
-export function clearSession(): void {
-  window.localStorage.removeItem(TOKEN_KEY);
+export function forgetUser(): void {
+  window.localStorage.removeItem(LEGACY_TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
 }
 
@@ -74,9 +74,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     }
   }
 
-  const headers: Record<string, string> = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const headers: Record<string, string> = { [CLIENT_HEADER]: "web" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
   const response = await fetch(url.toString(), {
@@ -84,12 +82,15 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
     headers,
     body: options.formData ?? (options.body !== undefined ? JSON.stringify(options.body) : undefined),
     signal: options.signal,
+    credentials: "include",
   });
 
   if (response.status === 401 && typeof window !== "undefined") {
-    clearSession();
+    forgetUser();
     if (!window.location.pathname.startsWith("/login")) {
-      window.location.href = "/login";
+      // An expired session returns the visitor to where they were after sign-in.
+      const here = window.location.pathname + window.location.search;
+      window.location.href = here === "/" ? "/login" : `/login?next=${encodeURIComponent(here)}`;
     }
   }
 
@@ -114,15 +115,16 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
 export const api = {
   login: (email: string, password: string) =>
-    apiFetch<{ access_token: string; user: unknown }>("/auth/login", {
+    apiFetch<{ user: unknown }>("/auth/login", {
       body: { email, password },
     }),
   me: () => apiFetch("/auth/me"),
+  logout: () => apiFetch<void>("/auth/logout", { method: "POST" }),
   demoInfo: () =>
     apiFetch<{ enabled: boolean; email: string | null; full_name: string | null; role: string | null }>(
       "/auth/demo",
     ),
   demoLogin: () =>
-    apiFetch<{ access_token: string; user: unknown }>("/auth/demo-login", { method: "POST" }),
+    apiFetch<{ user: unknown }>("/auth/demo-login", { method: "POST" }),
   health: () => apiFetch("/health"),
 };

@@ -12,17 +12,39 @@ const ROUTES = [
   "/audit", "/metrics", "/simulation", "/settings",
 ];
 
-test.beforeEach(async ({ context }) => {
-  const response = await fetch(`${API}/auth/demo-login`, { method: "POST" });
-  test.skip(!response.ok, "The API is not in demo mode; these checks sign in through it.");
-  const login = await response.json();
-  await context.addInitScript(
-    ([token, user]) => {
-      localStorage.setItem("textileops.token", token);
-      localStorage.setItem("textileops.user", JSON.stringify(user));
-    },
-    [login.access_token, login.user],
-  );
+test.beforeEach(async ({ context }, testInfo) => {
+  if (testInfo.title.startsWith("session:")) return;
+  // Sign in the way the browser does: through the web origin's proxy, which
+  // hands back the HttpOnly session cookie into this context's cookie jar.
+  const response = await context.request.post("/api/v1/auth/demo-login", {
+    headers: { "x-textileops-client": "web" },
+  });
+  test.skip(!response.ok(), "The API is not in demo mode; these checks sign in through it.");
+});
+
+test("session: a signed-out visitor is sent to sign in, then returned to the page", async ({ page }) => {
+  await page.goto("/orders?risk=late");
+  await expect(page).toHaveURL(/\/login\?next=/);
+  await page.getByRole("button", { name: /Explore the demo/ }).click();
+  await expect(page).toHaveURL(/\/orders\?risk=late$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Customer orders" })).toBeVisible();
+});
+
+test("session: the token is never readable by the page, and sign-out ends the session", async ({ page, context }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Explore the demo/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Command centre" })).toBeVisible();
+  const cookie = (await context.cookies()).find((c) => c.name === "textileops_session");
+  expect(cookie?.httpOnly).toBe(true);
+  const visible = await page.evaluate(() => document.cookie + JSON.stringify({ ...localStorage }));
+  expect(visible).not.toContain(cookie!.value);
+  await page.locator('button[aria-haspopup="menu"]').click();
+  await page.getByRole("menuitem", { name: /Sign out/ }).click();
+  // Sign-out waits for the server to clear the cookie; under three parallel
+  // browsers on one small container that can take longer than the default 5 s.
+  await expect(page).toHaveURL(/\/login/, { timeout: 20_000 });
+  await page.goto("/exceptions");
+  await expect(page).toHaveURL(/\/login/);
 });
 
 for (const route of ROUTES) {

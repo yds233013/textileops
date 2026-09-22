@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-insecure-secret-change-me"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 12
+    #: The browser session lives in an HttpOnly cookie of this name; scripts on
+    #: the page never see the token. Bearer headers remain for API clients.
+    session_cookie_name: str = "textileops_session"
     # Seeded demo accounts are only created for non-production environments.
     demo_password: str = "textileops"
 

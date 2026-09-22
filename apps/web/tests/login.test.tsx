@@ -9,10 +9,11 @@ const demoInfo = vi.fn();
 const demoLogin = vi.fn();
 vi.mock("@/lib/api", () => ({
   api: { demoInfo: () => demoInfo(), demoLogin: () => demoLogin(), login: vi.fn() },
-  setSession: vi.fn(),
+  rememberUser: vi.fn(),
 }));
 
 import LoginPage from "@/app/login/page";
+import { safeNext } from "@/lib/session";
 
 /**
  * The login page is the first thing a person sent the demo link sees. It must
@@ -28,7 +29,7 @@ describe("login", () => {
 
   it("offers one-click entry when the server is in demo mode, and uses it", async () => {
     demoInfo.mockResolvedValue({ enabled: true, full_name: "Ramesh Kaveri" });
-    demoLogin.mockResolvedValue({ access_token: "t", user: {} });
+    demoLogin.mockResolvedValue({ user: {} });
     render(<LoginPage />);
     const button = await screen.findByRole("button", { name: /Explore the demo/ });
     expect(screen.getByText(/signed in as Ramesh Kaveri, the owner/)).toBeInTheDocument();
@@ -49,5 +50,13 @@ describe("login", () => {
     const { container } = render(<LoginPage />);
     await screen.findByRole("button", { name: /Explore the demo/ });
     expect(container.textContent).not.toMatch(/DEMO_PASSWORD|textileops by default|\.env/);
+  });
+
+  it("returns to the page the visitor was sent from, and only to this site", () => {
+    expect(safeNext("?next=%2Forders%2Fabc%3Frisk%3Dlate")).toBe("/orders/abc?risk=late");
+    expect(safeNext("")).toBe("/");
+    expect(safeNext("?next=https%3A%2F%2Fevil.example")).toBe("/");
+    expect(safeNext("?next=%2F%2Fevil.example")).toBe("/");
+    expect(safeNext("?next=%2F%5Cevil.example")).toBe("/");
   });
 });

@@ -30,7 +30,7 @@ describe("API proxy", () => {
       new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } }),
     );
     const request = new NextRequest("http://web.example/api/v1/orders?risk=late", {
-      headers: { authorization: "Bearer abc", cookie: "session=should-not-travel" },
+      headers: { authorization: "Bearer abc", cookie: "other=should-not-travel; textileops_session=tok" },
     });
     const response = await GET(request, params("orders"));
     expect(response.status).toBe(200);
@@ -38,8 +38,9 @@ describe("API proxy", () => {
     expect(String(target)).toBe("https://api.internal.example/api/v1/orders?risk=late");
     const sent = new Headers(init.headers);
     expect(sent.get("authorization")).toBe("Bearer abc");
-    // Only an allow-list of headers is forwarded; cookies are not among them.
-    expect(sent.get("cookie")).toBeNull();
+    // Only an allow-list of headers is forwarded, and of the cookies only the
+    // session travels: nothing else set on this origin reaches the API.
+    expect(sent.get("cookie")).toBe("textileops_session=tok");
   });
 
   it("accepts a private-network host:port when no full origin is given", async () => {
@@ -77,5 +78,15 @@ describe("API proxy", () => {
     const response = await GET(new NextRequest("http://web.example/api/v1/health"), params("health"));
     expect(response.status).toBe(502);
     expect((await response.json()).code).toBe("api_unreachable");
+  });
+
+  it("passes the session cookie back to the browser, and nothing else the API sets", async () => {
+    vi.stubEnv("API_ORIGIN", "https://api.internal.example");
+    const upstream = new Headers({ "content-type": "application/json" });
+    upstream.append("set-cookie", "textileops_session=tok; HttpOnly; Path=/; SameSite=lax");
+    upstream.append("set-cookie", "tracking=1; Path=/");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200, headers: upstream }));
+    const response = await POST(new NextRequest("http://web.example/api/v1/auth/demo-login", { method: "POST" }), params("auth", "demo-login"));
+    expect(response.headers.getSetCookie()).toEqual(["textileops_session=tok; HttpOnly; Path=/; SameSite=lax"]);
   });
 });

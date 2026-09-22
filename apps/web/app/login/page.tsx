@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { IconArrowRight, Logo } from "@/components/icons";
 import { Button, Field, inputClass } from "@/components/ui";
-import { api, setSession } from "@/lib/api";
+import { api, rememberUser } from "@/lib/api";
+import { safeNext } from "@/lib/session";
 
 type Demo = { enabled: boolean; full_name: string | null } | null;
 
@@ -30,8 +31,8 @@ export default function LoginPage() {
     setError(null);
     try {
       const result = await api.login(email, password);
-      setSession(result.access_token, result.user);
-      router.replace("/");
+      rememberUser(result.user);
+      router.replace(safeNext(window.location.search));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign in failed.");
     } finally {
@@ -44,8 +45,8 @@ export default function LoginPage() {
     setError(null);
     try {
       const result = await api.demoLogin();
-      setSession(result.access_token, result.user);
-      router.replace("/");
+      rememberUser(result.user);
+      router.replace(safeNext(window.location.search));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign in failed.");
       setPending(null);
@@ -91,9 +92,16 @@ export default function LoginPage() {
 
       <section className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
-          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-            <Logo size={28} />
-            <span className="text-[15px] font-semibold tracking-tight text-ink-950">TextileOps</span>
+          <div className="mb-8 lg:hidden">
+            <div className="flex items-center gap-2.5">
+              <Logo size={28} />
+              <span className="text-[15px] font-semibold tracking-tight text-ink-950">TextileOps</span>
+            </div>
+            {/* On a phone the pitch panel is hidden; this is the one line of it that must survive. */}
+            <p className="mt-3 text-[13.5px] leading-5 text-ink-600">
+              AI-assisted production and order control for textile manufacturers: it reconciles orders,
+              yarn, purchasing, production, QC and shipments, and flags what will make an order late.
+            </p>
           </div>
 
           <h2 className="text-xl font-semibold tracking-tight text-ink-950">Sign in</h2>
@@ -106,6 +114,10 @@ export default function LoginPage() {
                 A fictional knitting mill with a supplier running late, a failed shade check and
                 decisions waiting for approval. No password needed
                 {demo.full_name ? ` — you will be signed in as ${demo.full_name}, the owner` : ""}.
+              </p>
+              <p className="mt-1.5 text-xs leading-5 text-brand-800/70">
+                Approve, dismiss, upload — anything you change is put back once the demo has been left
+                alone for half an hour.
               </p>
               <div className="mt-3">
                 <Button

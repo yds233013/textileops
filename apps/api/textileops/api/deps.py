@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session
 
+from textileops.core.config import settings
 from textileops.core.db import get_session
 from textileops.core.errors import AuthError, PermissionError_
 from textileops.core.security import decode_access_token
@@ -23,13 +24,30 @@ def db_session() -> Iterator[Session]:
 DbSession = Annotated[Session, Depends(db_session)]
 
 
+#: Sent by the web client on every request. A cross-site page cannot set a
+#: custom header without a CORS preflight, which the API's origin allow-list
+#: refuses — so requiring it on cookie-authenticated writes stops CSRF.
+CLIENT_HEADER = "x-textileops-client"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _session_token(request: Request, authorization: str | None) -> str:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    cookie = request.cookies.get(settings.session_cookie_name)
+    if cookie:
+        if request.method not in SAFE_METHODS and request.headers.get(CLIENT_HEADER) != "web":
+            raise AuthError("This request did not come from the TextileOps web client.")
+        return cookie
+    raise AuthError("Sign in to continue.")
+
+
 def current_user(
+    request: Request,
     session: DbSession,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise AuthError("Sign in to continue.")
-    payload = decode_access_token(authorization.split(" ", 1)[1].strip())
+    payload = decode_access_token(_session_token(request, authorization))
     try:
         user_id = uuid.UUID(payload["sub"])
     except (KeyError, ValueError):

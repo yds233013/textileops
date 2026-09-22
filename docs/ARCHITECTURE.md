@@ -128,8 +128,11 @@ leave its partial writes behind for a retry to duplicate.
 
 ## Frontend
 
-Next.js App Router with client-side data fetching against the API. The API is a
-separate service with its own auth, so the browser holds a bearer token and no
+Next.js App Router with client-side data fetching against the API, through a
+same-origin proxy (`app/api/v1/[...path]/route.ts`). The session is an HttpOnly,
+SameSite=Lax cookie set by the API at sign-in: no script on the page can read
+it, and cookie-authenticated writes must carry the web client's own header, which
+a cross-site page cannot add (CSRF). API clients use a bearer token instead. No
 secret ever reaches the client. There is no caching library: an operations
 screen should show what is true now, and every mutation reloads what it
 changed.

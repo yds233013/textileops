@@ -15,11 +15,13 @@
  * request can change the host it is sent to.
  */
 import type { NextRequest } from "next/server";
+// The one cookie the API cares about. Any other cookie on this origin stays here.
+import { SESSION_COOKIE } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const FORWARD_REQUEST_HEADERS = ["authorization", "content-type", "accept", "x-request-id"];
+const FORWARD_REQUEST_HEADERS = ["authorization", "content-type", "accept", "x-request-id", "x-textileops-client"];
 const FORWARD_RESPONSE_HEADERS = ["content-type", "x-request-id", "content-disposition", "cache-control"];
 
 async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<Response> {
@@ -45,6 +47,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  const sessionCookie = request.cookies.get(SESSION_COOKIE)?.value;
+  if (sessionCookie) headers.set("cookie", `${SESSION_COOKIE}=${sessionCookie}`);
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
 
@@ -71,6 +75,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   for (const name of FORWARD_RESPONSE_HEADERS) {
     const value = upstream.headers.get(name);
     if (value) responseHeaders.set(name, value);
+  }
+  // Sign-in and sign-out set or clear the HttpOnly session cookie.
+  for (const cookie of upstream.headers.getSetCookie?.() ?? []) {
+    if (cookie.startsWith(`${SESSION_COOKIE}=`)) responseHeaders.append("set-cookie", cookie);
   }
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }
