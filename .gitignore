@@ -38,3 +38,6 @@ uploads/
 .DS_Store
 .idea/
 .vscode/
+
+# Local editor/agent tooling
+.claude/

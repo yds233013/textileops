@@ -16,23 +16,25 @@
 # set PILOT_MODE=true, create real users, and read docs/DEPLOYMENT.md first.
 #
 # Plans and prices change; check them in the dashboard before creating. Private
-# services and background workers are not available on free plans.
+# services and background workers have no free plan, so this Blueprint cannot
+# be created at zero cost. Plan names follow the current Blueprint spec
+# (render.com/docs/blueprint-spec).
 
 databases:
   - name: textileops-db
     databaseName: textileops
     user: textileops
     postgresMajorVersion: "16"
-    plan: basic-256mb
+    plan: 0.1c-256mb
 
 services:
   - type: web
     name: textileops-web
     runtime: docker
-    rootDir: apps/web
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: starter
+    # Both paths are relative to the repository root, not to a rootDir.
+    dockerfilePath: ./apps/web/Dockerfile
+    dockerContext: ./apps/web
+    plan: 0.5c-512mb
     healthCheckPath: /login
     autoDeploy: false
     envVars:
@@ -45,10 +47,9 @@ services:
   - type: pserv
     name: textileops-api
     runtime: docker
-    rootDir: apps/api
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: starter
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    plan: 0.5c-512mb
     autoDeploy: false
     envVars:
       - key: DATABASE_URL
@@ -81,22 +82,17 @@ services:
   - type: worker
     name: textileops-worker
     runtime: docker
-    rootDir: apps/api
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
     dockerCommand: ./scripts/start-worker.sh
-    plan: starter
+    plan: 0.5c-512mb
     autoDeploy: false
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: textileops-db
           property: connectionString
-      - key: JWT_SECRET
-        fromService:
-          name: textileops-api
-          type: pserv
-          envVarKey: JWT_SECRET
+      # No JWT_SECRET: the worker never issues or verifies a token.
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
