@@ -60,16 +60,24 @@ at the moment of execution, and every step is audited.
 
 ## Known demo limitations
 
+* **Free hosting, so the first visit can be slow.** The demo runs on Render's
+  free plan, which puts it to sleep after 15 minutes without visitors. The next
+  visit wakes it: the page says *Waking TextileOps up…* and carries on by
+  itself, typically within one to two minutes. Open the link a couple of minutes
+  before showing it to someone.
+* **A small server.** Once awake, the Command Centre takes a few seconds to fill
+  in and other pages one to three; grey placeholders show while they load.
 * **Fictional data only.** Nothing here is a real company, and TextileOps is not
   claimed to be deployed at one.
 * **Shared.** Every visitor is the same owner on the same data. What you change,
-  the next visitor sees — until the demo has been left alone for 30 minutes
-  after a change, when it reloads itself. It also reloads daily, because the
-  story is written relative to today.
+  someone else visiting at the same moment sees. After the demo has slept (or at
+  the start of a new day) it is reloaded as seeded, so the next visitor gets the
+  same story.
 * **Uploads are not kept.** An upload is processed straight away, but the
   hosted demo has no permanent file storage: the original disappears on the
-  next restart or reset. Please upload only made-up documents.
+  next restart. Please upload only made-up documents.
 * **No outbound channels.** Approving a message produces a draft; nothing is
   emailed.
-* **One small server.** Pages load in about a second or two; the first request
-  after a deploy is slower.
+* **The free database expires after 30 days.** Replacing it takes three clicks
+  and the demo reseeds itself — see *Free-tier limitations* in
+  [`DEPLOYMENT.md`](DEPLOYMENT.md).

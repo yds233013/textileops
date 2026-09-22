@@ -92,6 +92,16 @@ export interface Dashboard {
   counts_by_type: Record<string, number>;
   ai_mode: "model" | "deterministic";
   ai_note: string;
+  /** Open orders promised in the next three weeks, soonest first. */
+  upcoming: UpcomingOrder[];
+}
+
+export interface UpcomingOrder {
+  id: string;
+  number: string;
+  customer_name: string;
+  promised_date: string;
+  risk: string;
 }
 
 export interface OrderSummary {

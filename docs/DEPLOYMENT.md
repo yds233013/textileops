@@ -4,54 +4,65 @@ Two shapes are supported:
 
 * **A hosted demo** — fictional data, one-click sign-in, reloads itself daily
   and after visitors have changed it and left. This is what `render.yaml`
-  deploys: one container and a database.
+  deploys: one container and a database, both on Render's **free** plans.
+  Live at https://textileops.onrender.com.
 * **A real business** — pilot mode, real users with passwords, no demo mode.
   Same code, services split apart. See *From demo to pilot* below.
 
-## The hosted demo: one container
+## The hosted demo: one container, free plans
 
 ```
             browser
                │  HTTPS (TLS terminated by Render)
                ▼
-   ┌──────────────────────────────── one container (deploy/render/Dockerfile) ─┐
-   │                                                                          │
-   │   Next.js  0.0.0.0:$PORT  ── /api/v1/* ──▶  FastAPI  127.0.0.1:8000       │
-   │   (the only listener       server-side      (loopback only: no address   │
-   │    reachable from outside)  proxy            anyone outside can reach)   │
-   │                                                                          │
-   │   worker (job queue, demo refresh)  ── no listener                       │
-   └──────────────────────────────────┬───────────────────────────────────────┘
+   ┌──────────────────────────── one container (deploy/render/Dockerfile) ─┐
+   │                                                                      │
+   │   Next.js  0.0.0.0:$PORT  ── /api/v1/* ──▶  FastAPI  127.0.0.1:8000   │
+   │   (the only listener       server-side      (loopback only; the      │
+   │    reachable from outside)  proxy            worker runs as a thread │
+   │                                              in the same process)    │
+   └──────────────────────────────────┬───────────────────────────────────┘
                                       ▼
-                          Render PostgreSQL 16 (managed)
+                        Render PostgreSQL 16 (free plan)
 ```
 
-`deploy/render/start.sh` migrates (under an advisory lock), loads or refreshes
-the demo, then starts the three processes. If any of them exits, it stops the
-others and exits non-zero so Render restarts the container: a web front end
-answering in front of a dead API would be a demo that lies. Render's health
-check is `/api/v1/health` **through the web server's proxy**, so it only passes
-when web, API and database all work.
+`deploy/render/start.sh` starts two processes: the Next.js server, at once, and
+`python -m textileops.serve`, which migrates (under an advisory lock), reloads
+the demo if it needs it, requests the first pages in-process so they are warm,
+and then serves the API on loopback with the worker loop as a thread. If either
+process exits, the script stops the other and exits non-zero so Render restarts
+the container: a web front end answering in front of a dead API would be a demo
+that lies. Render's health check is `/api/v1/health` **through the web server's
+proxy**, so it passes only when web, API and database all work.
 
-**Why one container.** On Render, a private service and a background worker
-each need their own paid instance (neither has a free plan). A demo does not
-need them scaled independently, and the boundary that matters survives: the API
-has no public address and the browser only ever talks to the web origin. It
-also means an uploaded file lands on the filesystem the worker reads.
-
-**Cost.** Render's current prices (checked on render.com/pricing): the
-`0.5c-512mb` web instance is $7/month and the `0.1c-256mb` database $6/month
-plus $0.30/GB of storage — about **$13.30/month**. The free web plan sleeps
-after 15 idle minutes (about a minute to wake) and the free database is deleted
-after 30 days, so neither suits a link meant to be sent to people. The
-three-service layout would cost about $27/month.
-
-**Memory.** All three processes run in 512 MB: roughly 200 MB after seeding,
-with one API worker process (`WEB_CONCURRENCY=1`) and Node's heap capped.
+**Why one container.** Render's private services and background workers have no
+free plan. A demo does not need them scaled independently, and the boundary that
+matters survives: the API has no public address and the browser only ever talks
+to the web origin. It also means an uploaded file lands on the filesystem the
+worker reads.
 
 **The model provider's key is not configured at all** on the hosted demo:
 `AI_PROVIDER=stub`, and there is no `ANTHROPIC_API_KEY` entry in the Blueprint.
 Every investigation there comes from the deterministic rule engine and says so.
+
+### Free-tier limitations
+
+Both resources are on Render's free plans (`tests/test_deployment_config.py`
+fails if either is not). Nothing in the Blueprint can incur a charge. What that
+costs in behaviour:
+
+| Limitation | What a visitor sees | What TextileOps does about it |
+|---|---|---|
+| The service **sleeps after 15 minutes** without a request. | The first visit after a quiet spell waits while it wakes — typically one to two minutes, longer if the demo reloads (below). | The web server starts first; the sign-in page and app say *Waking TextileOps up…* and carry on by themselves. One Python process instead of four, bytecode compiled at build time, and the first pages warmed before the API accepts requests. |
+| **A tenth of a CPU, 512 MB.** | Once awake, the Command Centre fills in about 5–6 seconds, other pages in 1–3; skeletons show while it loads. | Order assessment batched; the Command Centre's upcoming list comes from the dashboard's own work; no link prefetching. About 220 MB in use. |
+| **The free database expires 30 days after creation** (Render then allows 14 days to upgrade before deleting it), holds 1 GB and has no backups. | After expiry the demo stops working until the database is replaced. | The demo keeps nothing worth keeping: an empty database is seeded on the next boot. To renew: delete `textileops-db` in the dashboard, then **Blueprints → textileops → Manual sync**, then **Manual Deploy** on the web service. |
+| **750 free instance hours a month per workspace**, shared with any other free service in it. | A sleeping service uses none. | No keep-alive pinger, deliberately: keeping it awake around the clock would spend the workspace's hours and could suspend other free services in it. |
+| **No persistent disk.** | Uploads are processed straight away but the original file is gone after a restart. | The upload screen says so; reprocessing a lost file says so. |
+| **Waking resets a changed demo.** | After a quiet spell the demo is as seeded again. | Because a sleeping worker cannot watch for 30 idle minutes, waking up *is* the signal that the last visitor left (`seed/refresh.py`, `just_started`). |
+
+Moving to paid plans needs only the `plan:` lines in `render.yaml` changed
+(`0.5c-512mb` web, `0.1c-256mb` database — about $13/month at the time of
+writing): no sleep, no database expiry.
 
 ### Creating it on Render
 
@@ -59,8 +70,8 @@ Every investigation there comes from the deterministic rule engine and says so.
    Render's GitHub app needs access to the repository — grant it to *only
    select repositories*.
 2. Render reads `render.yaml` and shows two resources: the `textileops` web
-   service and the `textileops-db` database. A payment method is needed for the
-   paid plans.
+   service and the `textileops-db` database, both on free plans. No payment
+   method is asked for. (A workspace may have only one free database.)
 3. **Apply.** The database is created, the container migrates and loads the
    demo company on first boot, and the site is available at its
    `onrender.com` address.
@@ -125,14 +136,16 @@ a document telling a person to remember something is not a control:
   the seeded owner. With demo mode off it answers exactly as a wrong password.
   The session is an HttpOnly, `Secure`, `SameSite=Lax` cookie — see
   `docs/SECURITY.md`.
-* **Freshness.** The data is written relative to "today". The worker checks
-  every two minutes and reloads it once per UTC day (`textileops demo-refresh`).
-  The container also loads it on first boot.
+* **Freshness.** The data is written relative to "today". It is reloaded once
+  per UTC day: when the container starts (which, on the free plan, is every
+  wake-up) and by the worker, which checks every two minutes while awake.
 * **Shared state, and putting it back.** Every visitor is the same owner on the
-  same data. So once a visitor has changed anything (any audit event with a
-  person as actor) and the demo has then been left alone for 30 minutes, the
-  worker reloads it. It never reloads underneath someone still clicking; two
-  visitors at the same moment do share one demo.
+  same data. Once a visitor has changed anything (any audit event with a person
+  as actor), the demo is reloaded when the container next starts — on the free
+  plan, after it has slept through 15 idle minutes — or, on an always-on host,
+  by the worker once nobody has touched it for 30 minutes. It never reloads
+  underneath someone still clicking; two visitors at the same moment do share
+  one demo.
 * **Safety of the reload.** It truncates every table, so it runs only in demo
   mode, never alongside pilot mode, and never on a database the demo seed did
   not create (it looks for the seed's own `demo.seeded` audit marker, and

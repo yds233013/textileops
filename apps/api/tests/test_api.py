@@ -91,6 +91,25 @@ def test_dashboard_reports_the_attention_queue(client, auth, session, supplier, 
     }
 
 
+def test_dashboard_lists_upcoming_commitments_the_same_way_the_order_list_does(
+    client, auth, session, customer, fabric
+):
+    """The Command Centre's upcoming panel now comes from the dashboard rather
+    than a second assessment of every order through /orders. It must say the
+    same thing the order list says."""
+    soon = make_sales_order(session, customer, fabric, promised_in=10)
+    make_sales_order(session, customer, fabric, promised_in=40)
+    session.flush()
+
+    body = client.get(f"{PREFIX}/dashboard", headers=auth).json()
+    orders = {o["id"]: o for o in client.get(f"{PREFIX}/orders", headers=auth).json()["items"]}
+
+    assert [u["number"] for u in body["upcoming"]] == [soon.number]
+    entry = body["upcoming"][0]
+    assert entry["risk"] == orders[entry["id"]]["risk"]
+    assert entry["promised_date"] == orders[entry["id"]]["promised_date"]
+
+
 def test_order_detail_and_timeline(client, auth, session, customer, fabric, yarn):
     inventory.create_lot(
         session,

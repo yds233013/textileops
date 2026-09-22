@@ -3,7 +3,8 @@
 AI-assisted production and order control for textile manufacturers.
 
 **Live demo:** https://textileops.onrender.com — press *Explore the demo*. It
-runs on a fictional company with invented data; see
+runs on a fictional company with invented data, on free hosting that sleeps when
+idle (the first visit after a quiet spell takes a minute or two to wake); see
 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) for a two-minute walkthrough.
 
 A mid-sized knit-fabric business runs on spreadsheets, WhatsApp messages and
@@ -202,14 +203,15 @@ page that scrolls sideways.
 
 ## Deploying it
 
-`render.yaml` deploys the hosted demo to Render as **one container and a
-database**: Next.js is the only public listener and proxies `/api/v1` to
-FastAPI bound to loopback, with the worker alongside
-(`deploy/render/Dockerfile`). The browser session is an HttpOnly cookie, the
-demo resets itself after visitors leave, and no model key is configured.
-`infra/docker-compose.prod.yml` runs the services separately. Both are
-described, with what refuses to start and why, in
-[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+`render.yaml` deploys the hosted demo to Render's **free plans** as one
+container and a database: Next.js is the only public listener and proxies
+`/api/v1` to FastAPI bound to loopback, with the worker as a thread beside it
+(`deploy/render/Dockerfile`, `apps/api/textileops/serve.py`). The browser
+session is an HttpOnly cookie, the demo reloads itself after visitors leave, and
+no model key is configured. The free plan sleeps when idle and its database
+expires after 30 days — the limitations and what TextileOps does about each are
+in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), which also covers running the
+services separately (`infra/docker-compose.prod.yml`) and what refuses to start.
 
 ---
 

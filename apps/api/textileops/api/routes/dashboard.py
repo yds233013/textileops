@@ -73,6 +73,14 @@ class MetricTile(BaseModel):
     tone: str = "neutral"  # neutral | good | warn | bad
 
 
+class UpcomingOrder(BaseModel):
+    id: uuid.UUID
+    number: str
+    customer_name: str
+    promised_date: dt.date
+    risk: str
+
+
 class DashboardOut(BaseModel):
     greeting: str
     as_of: dt.datetime
@@ -82,6 +90,14 @@ class DashboardOut(BaseModel):
     counts_by_type: dict[str, int]
     ai_mode: str
     ai_note: str
+    #: Open orders promised within ``UPCOMING_DAYS``, soonest first. From the
+    #: assessments this endpoint already makes, so the Command Centre does not
+    #: assess every order a second time through /orders.
+    upcoming: list[UpcomingOrder]
+
+
+UPCOMING_DAYS = 21
+UPCOMING_LIMIT = 6
 
 
 def _greeting(now: dt.datetime) -> str:
@@ -278,6 +294,17 @@ def dashboard(
             "running on the deterministic rule engine, and every AI-derived item is "
             "labelled accordingly."
         ),
+        upcoming=[
+            UpcomingOrder(
+                id=a.order_id,
+                number=a.number,
+                customer_name=a.customer_name,
+                promised_date=a.promised_date,
+                risk=a.risk.value,
+            )
+            for a in sorted(assessments, key=lambda a: (a.promised_date, a.number))
+            if (a.promised_date - today).days <= UPCOMING_DAYS
+        ][:UPCOMING_LIMIT],
     )
 
 

@@ -146,7 +146,7 @@ export default function LoginPage() {
               </p>
               <p className="mt-1.5 text-xs leading-5 text-brand-800/70">
                 Approve, dismiss, upload — anything you change is put back once the demo has been left
-                alone for half an hour.
+                alone for a while, so the next visitor sees the same story.
               </p>
               <div className="mt-3">
                 <Button

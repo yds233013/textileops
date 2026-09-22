@@ -20,7 +20,7 @@ import {
   StatStrip,
 } from "@/components/ui";
 import { apiFetch } from "@/lib/api";
-import { ago, businessToday, dateTime, daysFromNow, dueText, num, plural, shortDate } from "@/lib/format";
+import { ago, businessToday, dateTime, dueText, num, plural, shortDate } from "@/lib/format";
 import { useAction, useApi } from "@/lib/hooks";
 import { actionTypeLabel, exceptionTypeLabel } from "@/lib/labels";
 import type {
@@ -29,10 +29,10 @@ import type {
   Batch,
   Dashboard,
   MetricTile,
-  OrderList,
   Position,
   Proposal,
   Supplier,
+  UpcomingOrder,
 } from "@/lib/types";
 
 const QUEUE_LIMIT = 8;
@@ -205,7 +205,7 @@ export default function CommandCentrePage() {
 
         <aside className="space-y-6">
           <Approvals />
-          <Upcoming />
+          <Upcoming items={data?.upcoming ?? null} />
           <WhereProblemsAre data={data} />
         </aside>
       </div>
@@ -327,19 +327,11 @@ function Approvals() {
   );
 }
 
-function Upcoming() {
-  const { data, loading } = useApi<OrderList>("/orders");
-  const soon = useMemo(
-    () =>
-      (data?.items ?? [])
-        .filter((order) => {
-          const days = daysFromNow(order.promised_date);
-          return days !== null && days <= 21;
-        })
-        .sort((a, b) => a.promised_date.localeCompare(b.promised_date))
-        .slice(0, 6),
-    [data],
-  );
+/** From the dashboard response, which has already assessed every open order. */
+function Upcoming({ items }: { items: UpcomingOrder[] | null }) {
+  const soon = items ?? [];
+  const loading = items === null;
+  const data = items;
   return (
     <Card title="Upcoming commitments" subtitle="Orders promised in the next three weeks." flush>
       {loading && !data ? (
