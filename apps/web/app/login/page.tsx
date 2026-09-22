@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { IconArrowRight, Logo } from "@/components/icons";
 import { Button, Field, inputClass } from "@/components/ui";
-import { api, rememberUser } from "@/lib/api";
+import { api, isStartingUp, rememberUser } from "@/lib/api";
+import { WakingUp } from "@/components/waking";
 import { safeNext } from "@/lib/session";
 
 type Demo = { enabled: boolean; full_name: string | null } | null;
@@ -16,13 +17,35 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<"password" | "demo" | null>(null);
   const [demo, setDemo] = useState<Demo>(null);
+  const [waking, setWaking] = useState(false);
 
   useEffect(() => {
     document.title = "Sign in · TextileOps";
-    api
-      .demoInfo()
-      .then(setDemo)
-      .catch(() => setDemo(null));
+    let cancelled = false;
+    let retry: number | undefined;
+    const load = () =>
+      api
+        .demoInfo()
+        .then((value) => {
+          if (cancelled) return;
+          setWaking(false);
+          setDemo(value);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (isStartingUp(err)) {
+            // Free hosting waking from sleep: say so, and keep asking.
+            setWaking(true);
+            retry = window.setTimeout(load, 3000);
+          } else {
+            setDemo(null);
+          }
+        });
+    load();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retry);
+    };
   }, []);
 
   async function onSubmit(event: React.FormEvent) {
@@ -106,6 +129,12 @@ export default function LoginPage() {
 
           <h2 className="text-xl font-semibold tracking-tight text-ink-950">Sign in</h2>
           <p className="mt-1 text-[13.5px] text-ink-600">Kaveri Knit Fabrics</p>
+
+          {waking && (
+            <div className="mt-6">
+              <WakingUp compact />
+            </div>
+          )}
 
           {demo?.enabled && (
             <div className="mt-6 rounded-lg border border-brand-200 bg-brand-50 p-4">

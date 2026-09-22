@@ -2,11 +2,12 @@
 #
 #   docker build -f deploy/render/Dockerfile -t textileops .
 #
-# Three processes, one boundary:
+# Two processes, one boundary:
 #
 #   Next.js (web)   0.0.0.0:$PORT     the only listener the platform exposes
-#   FastAPI (api)   127.0.0.1:8000    loopback only: unreachable from outside
-#   worker          no listener       job queue + demo refresh
+#   FastAPI (api)   127.0.0.1:8000    loopback only: unreachable from outside;
+#                                     the worker runs as a thread beside it
+#                                     (apps/api/textileops/serve.py)
 #
 # The browser still talks only to the web origin, which proxies /api/v1 to the
 # API (apps/web/app/api/v1/[...path]/route.ts) — the same boundary as separate
@@ -45,7 +46,9 @@ RUN mkdir -p textileops && touch textileops/__init__.py \
 COPY apps/api/alembic.ini ./
 COPY apps/api/alembic ./alembic
 COPY apps/api/textileops ./textileops
-RUN pip install --no-deps .
+# Bytecode compiled at build time: on a tenth of a CPU, compiling the
+# application on every cold start costs seconds a visitor would wait through.
+RUN pip install --no-deps . && python -m compileall -q /app/api/textileops
 
 WORKDIR /app/web
 COPY --from=web /web/.next/standalone ./
@@ -69,7 +72,9 @@ ENV ENVIRONMENT=production \
     PORT=10000
 
 EXPOSE 10000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD python -c "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/api/v1/health', timeout=4).status==200 else 1)"
+# No Docker HEALTHCHECK: Render uses healthCheckPath (render.yaml), which goes
+# through the proxy to the database. A HEALTHCHECK here only spawned a Python
+# process every 30 s — on a free instance's tenth of a CPU they piled up faster
+# than they finished and starved the application they were checking.
 
 CMD ["/app/start.sh"]

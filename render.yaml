@@ -1,38 +1,41 @@
-# Render Blueprint for the hosted TextileOps demo.
+# Render Blueprint for the hosted TextileOps demo — free plans only.
 #
 #   Render dashboard → New → Blueprint → select this repository.
 #
-# One service and a database:
+# One service and a database, both on Render's free plans. Nothing here can
+# incur a charge.
 #
 #   textileops       web, public   ONE container (deploy/render/Dockerfile):
 #                                  Next.js on $PORT — the only thing a visitor
 #                                  reaches — proxying /api/v1 to FastAPI on
-#                                  127.0.0.1, plus the background worker.
+#                                  127.0.0.1, with the worker as a thread.
 #   textileops-db                  Managed PostgreSQL 16.
 #
-# Why one container: a private service and a background worker each need their
-# own paid instance, and a demo does not need them scaled apart. The boundary
-# is the same — the API has no public address, the browser only ever talks to
-# the web origin — and uploads land on the same filesystem the worker reads.
-# To split them for a real deployment, use apps/api/Dockerfile and
-# apps/web/Dockerfile (see infra/docker-compose.prod.yml and docs/DEPLOYMENT.md).
+# Why one container: private services and background workers have no free
+# plan. The boundary is the same — the API has no public address, the browser
+# only ever talks to the web origin — and uploads land on the same filesystem
+# the worker reads. To split them for a real deployment, use apps/api/Dockerfile
+# and apps/web/Dockerfile (see infra/docker-compose.prod.yml, docs/DEPLOYMENT.md).
+#
+# What the free plans mean (docs/DEPLOYMENT.md, "Free-tier limitations"):
+#   * the service sleeps after 15 minutes without a request; the next visitor
+#     waits while it wakes, and TextileOps says so on screen;
+#   * a tenth of a CPU and 512 MB, so pages are slower than on a paid instance;
+#   * the free database expires 30 days after creation (14 more to upgrade
+#     before deletion) and holds 1 GB. The demo reseeds an empty database by
+#     itself, so replacing it is: delete it, re-sync this Blueprint.
 #
 # This file configures a DEMO: DEMO_MODE=true, one-click sign-in, fictional data
 # that reloads daily and after visitors have changed it and left. For a real
 # business, remove DEMO_MODE, set PILOT_MODE=true, create real users, and read
 # docs/DEPLOYMENT.md first.
-#
-# Plans and prices change; check them in the dashboard. Plan names follow the
-# Blueprint spec (render.com/docs/blueprint-spec). The free web plan sleeps
-# after 15 idle minutes and the free database is deleted after 30 days, which
-# is why neither is used for a link meant to be sent to people.
 
 databases:
   - name: textileops-db
     databaseName: textileops
     user: textileops
     postgresMajorVersion: "16"
-    plan: 0.1c-256mb
+    plan: free
 
 services:
   - type: web
@@ -41,7 +44,7 @@ services:
     # Both paths are relative to the repository root.
     dockerfilePath: ./deploy/render/Dockerfile
     dockerContext: .
-    plan: 0.5c-512mb
+    plan: free
     # Through the web server and its proxy to the API and the database: green
     # means the whole chain works, not only that Node is up.
     healthCheckPath: /api/v1/health

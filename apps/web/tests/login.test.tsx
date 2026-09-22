@@ -7,10 +7,15 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 
 const demoInfo = vi.fn();
 const demoLogin = vi.fn();
-vi.mock("@/lib/api", () => ({
-  api: { demoInfo: () => demoInfo(), demoLogin: () => demoLogin(), login: vi.fn() },
-  rememberUser: vi.fn(),
-}));
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return {
+    ApiError: actual.ApiError,
+    isStartingUp: actual.isStartingUp,
+    api: { demoInfo: () => demoInfo(), demoLogin: () => demoLogin(), login: vi.fn() },
+    rememberUser: vi.fn(),
+  };
+});
 
 import LoginPage from "@/app/login/page";
 import { safeNext } from "@/lib/session";
@@ -58,5 +63,21 @@ describe("login", () => {
     expect(safeNext("?next=https%3A%2F%2Fevil.example")).toBe("/");
     expect(safeNext("?next=%2F%2Fevil.example")).toBe("/");
     expect(safeNext("?next=%2F%5Cevil.example")).toBe("/");
+  });
+
+  it("says the demo is waking up while the API starts, then offers it", async () => {
+    // Free hosting asleep: the web server answers, the API behind it does not yet.
+    const { ApiError } = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    demoInfo
+      .mockRejectedValueOnce(new ApiError(502, "api_unreachable", "starting", {}))
+      .mockResolvedValue({ enabled: true, full_name: "Ramesh Kaveri" });
+    render(<LoginPage />);
+    expect(await screen.findByText(/Waking TextileOps up/)).toBeInTheDocument();
+    expect(screen.queryByText(/could not be reached/)).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(await screen.findByRole("button", { name: /Explore the demo/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Waking TextileOps up/)).not.toBeInTheDocument();
+    vi.useRealTimers();
   });
 });

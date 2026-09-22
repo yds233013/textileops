@@ -5,6 +5,7 @@ from __future__ import annotations
 import signal
 import sys
 import time
+from collections.abc import Callable
 from types import FrameType
 
 from textileops.core.config import settings
@@ -54,12 +55,18 @@ def main() -> int:
     configure_logging()
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
+    return run_loop(lambda: _running)
+
+
+def run_loop(should_run: Callable[[], bool], *, first_demo_check_in: float = 0.0) -> int:
+    """The worker loop. `main` runs it as its own process; the single-container
+    demo (textileops.serve) runs it as a thread beside the API."""
     logger.info(
         "worker_started", identity=worker_identity(), tasks=registered_tasks()
     )
 
-    next_demo_check = 0.0
-    while _running:
+    next_demo_check = time.monotonic() + first_demo_check_in
+    while should_run():
         if settings.demo_mode and time.monotonic() >= next_demo_check:
             _maybe_refresh_demo()
             next_demo_check = time.monotonic() + DEMO_REFRESH_EVERY_SECONDS

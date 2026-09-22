@@ -3,7 +3,8 @@
 import Link from "@/components/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, apiFetch, forgetUser, getStoredUser, rememberUser } from "@/lib/api";
+import { ApiError, api, apiFetch, forgetUser, getStoredUser, isStartingUp, rememberUser } from "@/lib/api";
+import { WakingUp } from "@/components/waking";
 import { setBusinessDate } from "@/lib/format";
 import { STATE_CHANGED } from "@/lib/hooks";
 import { roleLabel } from "@/lib/labels";
@@ -41,6 +42,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [checked, setChecked] = useState(false);
+  const [waking, setWaking] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [navOpen, setNavOpen] = useState(false);
   const [counts, setCounts] = useState<NavCounts>({});
   const [health, setHealth] = useState<Health>({});
@@ -56,6 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     // Health comes first because it carries the business date that every
     // relative date on the page is counted from (lib/format.ts).
     let cancelled = false;
+    let retry: number | undefined;
     const healthCheck = apiFetch<Health>("/health")
       .then((value) => {
         setBusinessDate(value.business_date);
@@ -65,6 +69,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     Promise.all([api.me(), healthCheck])
       .then(([me]) => {
         if (cancelled) return;
+        setWaking(false);
         rememberUser(me);
         setUser(me as User);
         setChecked(true);
@@ -75,15 +80,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           router.replace("/login");
           return;
         }
+        if (isStartingUp(err)) {
+          // Free hosting waking from sleep: wait for it, then carry on.
+          setWaking(true);
+          retry = window.setTimeout(() => setAttempt((n) => n + 1), 3000);
+          return;
+        }
         setUser(getStoredUser<User>());
         setChecked(true);
       });
     return () => {
       cancelled = true;
+      window.clearTimeout(retry);
     };
     // Checked once per load; navigation inside the app keeps the session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname === "/login"]);
+  }, [pathname === "/login", attempt]);
 
   useEffect(() => setNavOpen(false), [pathname]);
 
@@ -107,6 +119,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname, checked]);
 
   if (pathname === "/login") return <>{children}</>;
+  if (waking && !checked) return <WakingUp />;
   if (!checked) {
     return (
       <div className="flex min-h-screen items-center justify-center" role="status">

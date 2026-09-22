@@ -46,17 +46,31 @@ def test_one_public_service_and_nothing_else_listening_publicly():
 def test_the_api_listens_on_loopback_only_and_the_web_proxies_to_it():
     """One container must keep the boundary separate services had: the API
     has no address a visitor can reach."""
-    assert "--host 127.0.0.1" in START
-    assert "0.0.0.0" not in START.split("uvicorn", 1)[1].split("&", 1)[0]
-    assert 'API_ORIGIN="http://127.0.0.1:${API_PORT}"' in START
+    from textileops import serve
+
+    assert serve.API_HOST == "127.0.0.1"
+    serve_source = (ROOT / "apps/api/textileops/serve.py").read_text()
+    assert "host=API_HOST" in serve_source
     # Forwarded headers are trusted only from the web server beside it.
-    assert "--forwarded-allow-ips 127.0.0.1" in START
+    assert "forwarded_allow_ips=API_HOST" in serve_source
+    assert "python -m textileops.serve" in START
+    assert "uvicorn" not in START
+    assert 'API_ORIGIN="http://127.0.0.1:${API_PORT}"' in START
 
 
 def test_the_container_stops_when_any_process_dies():
     """A web server answering in front of a dead API is a demo that lies."""
     assert "wait -n" in START
     assert 'exit "$status"' in START
+
+
+def test_nothing_in_the_blueprint_can_incur_a_charge():
+    """The owner asked for a demo that costs nothing. A paid plan here would
+    create a paid resource on the next Blueprint sync."""
+    assert SERVICE["plan"] == "free"
+    assert [db["plan"] for db in BLUEPRINT["databases"]] == ["free"]
+    assert "disk" not in SERVICE, "persistent disks are paid"
+    assert all(s.get("plan") == "free" for s in BLUEPRINT["services"])
 
 
 def test_the_health_check_exercises_the_whole_chain():
@@ -94,6 +108,13 @@ def test_the_build_context_excludes_local_secrets_and_state():
     ignored = (ROOT / ".dockerignore").read_text().splitlines()
     for pattern in ("**/.env", "**/.env.*", ".git", "**/node_modules", "**/.venv"):
         assert pattern in ignored, pattern
+
+
+def test_the_image_ships_compiled_bytecode_and_no_docker_healthcheck():
+    """On a free instance's tenth of a CPU, compiling on every cold start and a
+    HEALTHCHECK spawning Python every 30 s both cost minutes."""
+    assert "compileall" in DOCKERFILE
+    assert "\nHEALTHCHECK" not in DOCKERFILE
 
 
 def test_the_bundle_is_built_to_use_the_same_origin_proxy():

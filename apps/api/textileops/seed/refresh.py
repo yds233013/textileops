@@ -50,7 +50,17 @@ class RefreshResult:
     reason: str
 
 
-def refresh_demo_if_stale(session: Session, *, force: bool = False) -> RefreshResult:
+def refresh_demo_if_stale(
+    session: Session, *, force: bool = False, just_started: bool = False
+) -> RefreshResult:
+    """Reload the demo if it is from an earlier day, or visitors changed it and left.
+
+    ``just_started`` is for the moment the container boots. On a host that
+    puts idle services to sleep (Render's free plan sleeps after 15 minutes
+    without a request), waking up *is* the evidence that everyone left, and a
+    worker thread that sleeps with the service would never see 30 idle minutes
+    go by. So at boot any visitor change is reason enough.
+    """
     if not settings.demo_mode:
         return RefreshResult(False, "demo mode is off")
     settings.assert_consistent()
@@ -68,7 +78,7 @@ def refresh_demo_if_stale(session: Session, *, force: bool = False) -> RefreshRe
             False,
             "this database has orders and was not created by the demo seed; refusing to reset it",
         )
-    reason = _why_reload(session, last, force=force)
+    reason = _why_reload(session, last, force=force, just_started=just_started)
     if reason is None:
         return RefreshResult(False, "already refreshed today, and no visitor has changed it since")
 
@@ -77,7 +87,9 @@ def refresh_demo_if_stale(session: Session, *, force: bool = False) -> RefreshRe
     return RefreshResult(True, f"reloaded the demo: {reason}")
 
 
-def _why_reload(session: Session, last: dt.datetime | None, *, force: bool) -> str | None:
+def _why_reload(
+    session: Session, last: dt.datetime | None, *, force: bool, just_started: bool
+) -> str | None:
     if force:
         return "forced"
     if last is None:
@@ -93,6 +105,8 @@ def _why_reload(session: Session, last: dt.datetime | None, *, force: bool) -> s
     )
     if visitor_last is None:
         return None
+    if just_started:
+        return "visitors changed it, and the service has just started"
     idle = clock.now() - clock.ensure_utc(visitor_last)
     if idle >= dt.timedelta(minutes=IDLE_RESET_MINUTES):
         return f"visitors changed it and it has been idle for {IDLE_RESET_MINUTES} minutes"

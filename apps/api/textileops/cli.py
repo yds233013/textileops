@@ -31,6 +31,12 @@ def _cmd_seed(args: argparse.Namespace) -> int:
 
 
 def _cmd_migrate(_args: argparse.Namespace) -> int:
+    migrate()
+    print("migrations: at head")
+    return 0
+
+
+def migrate() -> None:
     """Apply migrations, one process at a time.
 
     Every API instance runs this on start. An advisory lock makes the second
@@ -52,8 +58,6 @@ def _cmd_migrate(_args: argparse.Namespace) -> int:
             command.upgrade(config, "head")
         finally:
             lock.execute(text("SELECT pg_advisory_unlock(727274)"))
-    print("migrations: at head")
-    return 0
 
 
 def _alembic_ini():

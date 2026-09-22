@@ -128,3 +128,14 @@ export const api = {
     apiFetch<{ user: unknown }>("/auth/demo-login", { method: "POST" }),
   health: () => apiFetch("/health"),
 };
+
+/**
+ * The API is not answering yet: the web server is up but the API behind it is
+ * still starting (a free host waking from sleep), or a gateway timed out.
+ * Distinct from a real error, and never a reason to sign anyone out.
+ */
+export function isStartingUp(err: unknown): boolean {
+  if (err instanceof ApiError) return [502, 503, 504].includes(err.status);
+  // fetch() itself failed: the network, or a platform restarting the service.
+  return err instanceof TypeError;
+}

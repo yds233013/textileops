@@ -161,3 +161,33 @@ def test_a_real_database_with_visitor_activity_is_still_never_reset(session, cus
         result = refresh_demo_if_stale(session)
     assert result.refreshed is False
     assert "not created by the demo seed" in result.reason
+
+
+def test_waking_up_after_visitors_changed_it_reloads_straight_away(session):
+    """A free host sleeps an idle service, and its worker thread with it: the
+    30-minute idle rule could never fire. Waking up is the evidence instead."""
+    with demo():
+        refresh_demo_if_stale(session)
+        with clock.frozen(clock.now() + dt.timedelta(minutes=1)):
+            _visitor_changes_something(session)
+        with clock.frozen(clock.now() + dt.timedelta(minutes=2)):
+            assert refresh_demo_if_stale(session).refreshed is False
+            woke = refresh_demo_if_stale(session, just_started=True)
+    assert woke.refreshed is True
+    assert "just started" in woke.reason
+
+
+def test_waking_up_an_untouched_demo_does_not_reload_it(session):
+    """Reloading costs a cold start about a minute on a free instance; skip it
+    when nobody changed anything."""
+    with demo():
+        refresh_demo_if_stale(session)
+        assert refresh_demo_if_stale(session, just_started=True).refreshed is False
+
+
+def test_waking_up_never_resets_a_real_database(session, customer, fabric, user):
+    make_sales_order(session, customer, fabric)
+    session.flush()
+    with demo():
+        result = refresh_demo_if_stale(session, just_started=True)
+    assert result.refreshed is False
