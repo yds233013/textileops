@@ -7,6 +7,7 @@ import { measurementVerdict } from "@/components/quality";
 import { reached, Track } from "@/components/shipments";
 import { contentWidth } from "@/components/shell";
 import { ConfirmDialog, ProvenanceTag, Segmented } from "@/components/ui";
+import { businessToday, setBusinessDate } from "@/lib/format";
 import { exceptionTypeLabel, statusLabel } from "@/lib/labels";
 import type { Measurement, OrderSummary, Proposal, Shipment } from "@/lib/types";
 
@@ -17,7 +18,8 @@ import type { Measurement, OrderSummary, Proposal, Shipment } from "@/lib/types"
  */
 
 const isoDaysFromNow = (days: number) => {
-  const d = new Date();
+  setBusinessDate("2026-09-22");
+  const d = businessToday();
   d.setDate(d.getDate() + days);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };

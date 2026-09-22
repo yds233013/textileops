@@ -64,6 +64,7 @@ from textileops.models.intake import (
 from textileops.models.procurement import PurchaseOrder
 from textileops.services import clock, procurement
 from textileops.services.audit import record_audit, record_metric
+from textileops.services.prose import plural
 
 logger = get_logger(__name__)
 
@@ -165,7 +166,7 @@ def process_document(session: Session, document: SourceDocument) -> IngestionOut
     document.extracted_text, stripped_nulls = storage.sanitise_text(parsed.text)
     if stripped_nulls:
         outcome.notes.append(
-            f"{stripped_nulls} NUL byte(s) were removed from the extracted text "
+            f"{plural(stripped_nulls, 'NUL byte')} removed from the extracted text "
             "so it could be stored. The original file is unchanged."
         )
     document.page_count = parsed.page_count
@@ -512,7 +513,7 @@ def receive_message(
         summary=f"Message from {message.sender} via {channel.value}."
         + (" Duplicate of an earlier message." if duplicate else "")
         + (
-            f" {stripped_nulls} NUL byte(s) removed so the text could be stored."
+            f" {plural(stripped_nulls, 'NUL byte')} removed so the text could be stored."
             if stripped_nulls
             else ""
         ),

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { useParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { IconAlert, IconArrowRight } from "@/components/icons";
@@ -128,7 +128,7 @@ function BatchCard({ batchId }: { batchId: string }) {
       <p className={`border-t border-ink-100 px-3 py-1.5 text-xs ${materialsLate ? "text-high-text" : "text-ink-500"}`}>
         {data.material_ready_date
           ? materialsLate
-            ? `Every material is on site only from ${shortDate(data.material_ready_date)}, after the planned start (${shortDate(data.planned_start)}).`
+            ? `Not all of its materials are on site until ${shortDate(data.material_ready_date)}, after the planned start (${shortDate(data.planned_start)}).`
             : `Materials on site by ${shortDate(data.material_ready_date)}.`
           : "No date by which every material is covered: at least one is short."}
       </p>

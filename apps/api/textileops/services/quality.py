@@ -33,6 +33,7 @@ from textileops.models.quality import QCInspection, QCMeasurement
 from textileops.models.sales import SalesOrder, SalesOrderLine
 from textileops.services import clock, inventory, production
 from textileops.services.audit import record_audit
+from textileops.services.prose import plural
 
 ZERO = Decimal("0")
 
@@ -321,7 +322,7 @@ def propagate(
                 summary=(
                     f"Replacement batch {replacement.code} cancelled: "
                     f"{batch.code} passed re-inspection {inspection.code}. "
-                    f"{freed} material reservation(s) released."
+                    f"{plural(freed, 'material reservation')} released."
                 ),
                 actor_type="user" if user_id else "system",
                 actor_user_id=user_id,

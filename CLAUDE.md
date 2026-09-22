@@ -179,7 +179,10 @@ a route, it belongs in a service.
 ## Things that will bite you
 
 * **Never call `datetime.now()`.** Use `textileops.services.clock`. Tests
-  freeze it; the demo depends on it.
+  freeze it; the demo depends on it. The web app's equivalent: count days from
+  `businessToday()` and show instants with `dateTime()` (`lib/format.ts`),
+  never `new Date()` — the browser's own clock put "3 days late" beside
+  "2 days ago" for a visitor in another time zone.
 * **Never use a float for a quantity or money.** `Decimal` everywhere.
 * **A reservation and a batch requirement are the same demand.** Netting both
   invents a shortage. `MaterialPosition.supply_for_coverage` exists for this;

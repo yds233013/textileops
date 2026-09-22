@@ -47,6 +47,7 @@ from textileops.ai.schemas import (
 )
 from textileops.models.enums import AICallStatus, DocumentKind, MessageIntent
 from textileops.services import clock
+from textileops.services.prose import plural
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -199,7 +200,7 @@ class StubProvider(AIProvider):
             kind=kind,
             confidence=confidence,
             reasoning=(
-                f"Rule-based match on {hits} keyword(s) for {kind.value}."
+                f"Rule-based match on {plural(hits, 'keyword')} for {kind.value}."
                 if hits
                 else "No classification keywords matched; left as unknown for review."
             ),
@@ -374,7 +375,7 @@ class StubProvider(AIProvider):
         financial = impact.get("financial") or {}
         if financial.get("revenue_exposure"):
             financial_text = (
-                f"Revenue exposure on the affected order(s) is "
+                "Revenue exposure on the affected orders is "
                 f"{financial['revenue_exposure']} {financial.get('currency') or ''}"
                 f" ({financial.get('basis')} basis)."
             )

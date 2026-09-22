@@ -27,6 +27,7 @@ from textileops.services import clock
 from textileops.services import metrics as metrics_service
 from textileops.services import orders as order_service
 from textileops.services import production as production_service
+from textileops.services.prose import plural
 
 router = APIRouter(tags=["dashboard"])
 
@@ -215,7 +216,7 @@ def dashboard(
             ),
             hint=(
                 (
-                    f"Across {delivery.measured} order(s) with a confirmed delivery date."
+                    f"Across {plural(delivery.measured, 'order')} with a confirmed delivery date."
                     + (
                         f" {delivery.unmeasured} more are finished but not confirmed "
                         "delivered, so they are not counted."

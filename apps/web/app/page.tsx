@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { useMemo, useState } from "react";
 import { AttentionCard } from "@/components/attention";
 import { ActorTag, actorName } from "@/components/audit";
@@ -20,7 +20,7 @@ import {
   StatStrip,
 } from "@/components/ui";
 import { apiFetch } from "@/lib/api";
-import { ago, dateTime, dueText, num, plural, shortDate } from "@/lib/format";
+import { ago, businessToday, dateTime, daysFromNow, dueText, num, plural, shortDate } from "@/lib/format";
 import { useAction, useApi } from "@/lib/hooks";
 import { actionTypeLabel, exceptionTypeLabel } from "@/lib/labels";
 import type {
@@ -100,8 +100,7 @@ export default function CommandCentrePage() {
 
   if (error && !data) return <ErrorState error={error} onRetry={reload} />;
 
-  const now = new Date();
-  const eyebrow = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  const eyebrow = businessToday().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
   return (
     <>
@@ -334,7 +333,7 @@ function Upcoming() {
     () =>
       (data?.items ?? [])
         .filter((order) => {
-          const days = daysUntil(order.promised_date);
+          const days = daysFromNow(order.promised_date);
           return days !== null && days <= 21;
         })
         .sort((a, b) => a.promised_date.localeCompare(b.promised_date))
@@ -372,13 +371,6 @@ function Upcoming() {
   );
 }
 
-function daysUntil(value: string): number | null {
-  const [y, m, d] = value.split("-").map(Number);
-  if (!y) return null;
-  const target = Date.UTC(y, m - 1, d);
-  const today = new Date();
-  return Math.round((target - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86_400_000);
-}
 
 function WhereProblemsAre({ data }: { data: Dashboard | null }) {
   const rows = useMemo(

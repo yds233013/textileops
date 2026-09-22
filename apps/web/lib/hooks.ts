@@ -61,6 +61,9 @@ export function useApi<T>(
 }
 
 /** Run a mutation with pending/error state, for buttons and forms. */
+/** Fired after any successful action, so summaries elsewhere on screen refresh. */
+export const STATE_CHANGED = "textileops:state-changed";
+
 export function useAction<TArgs extends unknown[], TResult>(
   action: (...args: TArgs) => Promise<TResult>,
 ) {
@@ -72,7 +75,10 @@ export function useAction<TArgs extends unknown[], TResult>(
       setPending(true);
       setError(null);
       try {
-        return await action(...args);
+        const result = await action(...args);
+        // Anything that changed state may change the sidebar's counts.
+        window.dispatchEvent(new Event(STATE_CHANGED));
+        return result;
       } catch (err: unknown) {
         setError(err instanceof Error ? err : new Error(String(err)));
         return null;

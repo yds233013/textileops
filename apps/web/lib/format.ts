@@ -53,6 +53,24 @@ function parseCalendarDate(value: string): Date | null {
 }
 
 /**
+ * An instant ("2026-09-21T22:45:00Z") shown on the business's clock. The server
+ * counts every day — "late", "overdue", "promised in 5 days" — on the UTC
+ * calendar (services/clock.py), so timestamps are shown on it too. Shown in the
+ * viewer's own zone instead, "Order placed 28 Aug, 17:00" sat beside "Ordered
+ * 29 Aug" for the same order.
+ */
+function onBusinessClock(value: string): Date {
+  const instant = new Date(value);
+  return new Date(
+    instant.getUTCFullYear(),
+    instant.getUTCMonth(),
+    instant.getUTCDate(),
+    instant.getUTCHours(),
+    instant.getUTCMinutes(),
+  );
+}
+
+/**
  * Day before month, always: "20 Sep 2026". Unambiguous in India, the UK and the
  * US alike, which "09/10/2026" is not — and a delivery date read the wrong way
  * round is a promise broken by formatting.
@@ -67,7 +85,7 @@ function dayMonth(d: Date, withYear: boolean): string {
 
 export function date(value: string | null | undefined): string {
   if (!value) return "—";
-  const parsed = parseCalendarDate(value) ?? new Date(value);
+  const parsed = parseCalendarDate(value) ?? onBusinessClock(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return dayMonth(parsed, true);
 }
@@ -75,17 +93,17 @@ export function date(value: string | null | undefined): string {
 /** "20 Sep" this year, "20 Sep 2025" otherwise. For tables and dense rows. */
 export function shortDate(value: string | null | undefined): string {
   if (!value) return "—";
-  const parsed = parseCalendarDate(value) ?? new Date(value);
+  const parsed = parseCalendarDate(value) ?? onBusinessClock(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return dayMonth(parsed, parsed.getFullYear() !== new Date().getFullYear());
+  return dayMonth(parsed, parsed.getFullYear() !== businessToday().getFullYear());
 }
 
 export function dateTime(value: string | null | undefined): string {
   if (!value) return "—";
-  const parsed = new Date(value);
+  const parsed = onBusinessClock(value);
   if (Number.isNaN(parsed.getTime())) return value;
   const time = `${String(parsed.getHours()).padStart(2, "0")}:${String(parsed.getMinutes()).padStart(2, "0")}`;
-  return `${dayMonth(parsed, parsed.getFullYear() !== new Date().getFullYear())}, ${time}`;
+  return `${dayMonth(parsed, parsed.getFullYear() !== businessToday().getFullYear())}, ${time}`;
 }
 
 /** "4 min ago", "3 h ago", "2 days ago" — for when something happened. */
@@ -109,12 +127,31 @@ export function relativeAge(hours: number): string {
   return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
+/**
+ * The business's "today", as the server counts it. Every "late", "overdue" and
+ * "in 5 days" the API reports is counted from the server's date, so the screen
+ * must count from the same one: a visitor whose own clock is already on another
+ * day would otherwise see "3 days late" beside "2 days ago" for the same order.
+ * Set once from /health by the shell; until then, the UTC date the server also uses.
+ */
+let businessDate: Date | null = null;
+
+export function setBusinessDate(value: string | null | undefined): void {
+  businessDate = (value && parseCalendarDate(value)) || null;
+}
+
+export function businessToday(): Date {
+  if (businessDate) return new Date(businessDate);
+  const now = new Date();
+  return new Date(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+
 export function daysFromNow(value: string | null | undefined): number | null {
   if (!value) return null;
-  const parsed = parseCalendarDate(value) ?? new Date(value);
+  const parsed = parseCalendarDate(value) ?? onBusinessClock(value);
   if (Number.isNaN(parsed.getTime())) return null;
   const target = Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
-  const today = new Date();
+  const today = businessToday();
   const start = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   return Math.round((target - start) / 86_400_000);
 }

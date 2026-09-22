@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
@@ -18,6 +20,7 @@ from textileops.models.enums import (
 from textileops.models.exceptions import OperationalException
 from textileops.models.intake import ReconciliationItem
 from textileops.models.platform import Job
+from textileops.services import clock
 from textileops.workers.queue import registered_tasks
 
 router = APIRouter(tags=["system"])
@@ -32,6 +35,10 @@ class HealthResponse(BaseModel):
     version: str
     #: The data is fictional. The interface says so on every page.
     demo_mode: bool = False
+    #: The date every "late", "in 5 days" and "overdue" is counted from. The
+    #: browser uses this rather than its own clock, so a visitor in another
+    #: time zone never sees a date contradict the figure beside it.
+    business_date: dt.date
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -51,6 +58,7 @@ def health(session: DbSession) -> HealthResponse:
         ai_model=settings.ai_model if settings.ai_enabled else "deterministic-rules-v1",
         version=__version__,
         demo_mode=settings.demo_mode,
+        business_date=clock.today(),
     )
 
 

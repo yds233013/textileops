@@ -1,9 +1,11 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { apiFetch, clearSession, getStoredUser, getToken } from "@/lib/api";
+import { ApiError, api, apiFetch, forgetUser, getStoredUser, rememberUser } from "@/lib/api";
+import { setBusinessDate } from "@/lib/format";
+import { STATE_CHANGED } from "@/lib/hooks";
 import { roleLabel } from "@/lib/labels";
 import type { User } from "@/lib/types";
 import { IconChevronDown, IconLogout, IconMenu, IconX, Logo } from "./icons";
@@ -29,6 +31,7 @@ export function contentWidth(pathname: string): string {
 
 interface Health {
   demo_mode?: boolean;
+  business_date?: string;
   ai_provider?: string;
 }
 
@@ -47,20 +50,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setChecked(true);
       return;
     }
-    if (!getToken()) {
-      router.replace("/login");
-      return;
-    }
-    setUser(getStoredUser<User>());
-    setChecked(true);
-  }, [pathname, router]);
+    // The session cookie is HttpOnly, so the only way to know whether it is
+    // valid is to ask. A 401 sends the visitor to sign in; an API that cannot
+    // be reached is not a reason to sign anyone out — the page says so itself.
+    // Health comes first because it carries the business date that every
+    // relative date on the page is counted from (lib/format.ts).
+    let cancelled = false;
+    const healthCheck = apiFetch<Health>("/health")
+      .then((value) => {
+        setBusinessDate(value.business_date);
+        if (!cancelled) setHealth(value);
+      })
+      .catch(() => undefined);
+    Promise.all([api.me(), healthCheck])
+      .then(([me]) => {
+        if (cancelled) return;
+        rememberUser(me);
+        setUser(me as User);
+        setChecked(true);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        setUser(getStoredUser<User>());
+        setChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Checked once per load; navigation inside the app keeps the session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname === "/login"]);
 
   useEffect(() => setNavOpen(false), [pathname]);
 
   // Badge counts: refreshed on navigation and every minute, so an approval
   // someone else just made does not linger as a number here.
   useEffect(() => {
-    if (pathname === "/login" || !getToken()) return;
+    if (pathname === "/login" || !checked) return;
     let cancelled = false;
     const load = () =>
       apiFetch<NavCounts>("/system/counts")
@@ -68,16 +98,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         .catch(() => undefined);
     load();
     const timer = window.setInterval(load, 60_000);
+    window.addEventListener(STATE_CHANGED, load);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener(STATE_CHANGED, load);
     };
-  }, [pathname]);
-
-  useEffect(() => {
-    if (pathname === "/login") return;
-    apiFetch<Health>("/health").then(setHealth).catch(() => undefined);
-  }, [pathname]);
+  }, [pathname, checked]);
 
   if (pathname === "/login") return <>{children}</>;
   if (!checked) {
@@ -89,8 +116,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const signOut = () => {
-    clearSession();
+  const signOut = async () => {
+    // Clear the cookie on the server; forget the name locally either way.
+    await api.logout().catch(() => undefined);
+    forgetUser();
     router.replace("/login");
   };
 

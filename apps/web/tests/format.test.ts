@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { bytes, dueText, humanise, money, percent, quantity } from "@/lib/format";
+import { afterEach, describe, expect, it } from "vitest";
+import { businessToday, bytes, dateTime, daysFromNow, dueText, humanise, money, percent, quantity, shortDate, setBusinessDate } from "@/lib/format";
 
 describe("quantity", () => {
   it("always shows the unit beside the number", () => {
@@ -32,9 +32,10 @@ describe("money", () => {
 });
 
 describe("dueText", () => {
-  /** A calendar date N days from the viewer's own today. */
+  /** A calendar date N days from the business's today. */
   const isoDaysFromNow = (days: number) => {
-    const date = new Date();
+    setBusinessDate("2026-09-22");
+    const date = businessToday();
     date.setDate(date.getDate() + days);
     const month = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
@@ -62,5 +63,33 @@ describe("percent and bytes", () => {
     expect(percent(0.72)).toBe("72%");
     expect(percent(null)).toBe("—");
     expect(bytes(2048)).toBe("2.0 KB");
+  });
+});
+
+describe("business date", () => {
+  afterEach(() => setBusinessDate(null));
+
+  it("counts every relative date from the server's today, not the browser's", () => {
+    // A visitor whose clock is still on the 21st, looking at a business already
+    // on the 22nd, once saw "3 days late" beside "2 days ago" for one order.
+    setBusinessDate("2026-09-22");
+    expect(daysFromNow("2026-09-19")).toBe(-3);
+    expect(dueText("2026-09-19")).toBe("3 days ago");
+    expect(dueText("2026-09-23")).toBe("tomorrow");
+    expect(businessToday().getDate()).toBe(22);
+  });
+
+  it("falls back to the UTC date, which is the server's, until the server has said", () => {
+    setBusinessDate(null);
+    expect(businessToday().getDate()).toBe(new Date().getUTCDate());
+  });
+});
+
+describe("timestamps", () => {
+  it("are shown on the business clock, the same one every date is counted on", () => {
+    // Just after midnight UTC on the 29th is still the 28th in California; the
+    // order date beside it says the 29th, and so must this.
+    expect(dateTime("2026-08-29T00:30:00Z")).toBe("29 Aug, 00:30");
+    expect(shortDate("2026-08-29T00:30:00Z")).toBe("29 Aug");
   });
 });

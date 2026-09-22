@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { useRef, useState } from "react";
 import { IconInbox } from "@/components/icons";
 import {
@@ -23,7 +23,7 @@ import {
   textareaClass,
 } from "@/components/ui";
 import { apiFetch } from "@/lib/api";
-import { ago, bytes, dateTime, humanise, percent } from "@/lib/format";
+import { ago, bytes, dateTime, humanise, percent, plural } from "@/lib/format";
 import { statusLabel } from "@/lib/labels";
 import { useAction, useApi } from "@/lib/hooks";
 import type { SourceDocument, SupplierMessage } from "@/lib/types";
@@ -41,6 +41,8 @@ function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [result, setResult] = useState<string | null>(null);
 
+  const health = useApi<{ demo_mode?: boolean }>("/health");
+  const demoMode = Boolean(health.data?.demo_mode);
   const upload = useAction(async (file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -52,7 +54,7 @@ function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
     );
     setResult(
       `${response.message} Classified as ${humanise(response.document.kind)}; ` +
-        `${response.document.fact_count} fact(s) extracted.`,
+        `${plural(response.document.fact_count, "fact")} extracted.`,
     );
     if (fileInput.current) fileInput.current.value = "";
     onUploaded();
@@ -85,6 +87,13 @@ function UploadPanel({ onUploaded }: { onUploaded: () => void }) {
         <Button type="submit" disabled={upload.pending} loading={upload.pending}>
           Upload and process
         </Button>
+        {demoMode && (
+          <p className="text-xs leading-5 text-ink-500">
+            On this hosted demo, uploads are processed straight away but not kept: the demo has no
+            permanent file storage, and it resets itself after visitors leave. Please upload only
+            made-up documents.
+          </p>
+        )}
       </form>
       {result && (
         <div className="mt-3">
