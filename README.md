@@ -1,6 +1,10 @@
 # TextileOps
 
-Operations control for a textile manufacturer.
+AI-assisted production and order control for textile manufacturers.
+
+**Live demo:** https://textileops.onrender.com — press *Explore the demo*. It
+runs on a fictional company with invented data; see
+[`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) for a two-minute walkthrough.
 
 A mid-sized knit-fabric business runs on spreadsheets, WhatsApp messages and
 the owner's memory. The work that actually keeps customers happy — noticing
@@ -49,6 +53,31 @@ and only then does anything happen.
 **Admits what it cannot do.** There is no email connector, so an approved
 "contact the supplier" produces a draft for you to send and records the
 decision — it never claims to have sent anything.
+
+## How it is built
+
+```
+browser ──HTTPS──▶ Next.js (web) ──/api/v1 proxy──▶ FastAPI (api) ──▶ PostgreSQL
+                                                        ▲
+                                  worker (job queue) ───┘
+```
+
+| | Owns | Never does |
+|---|---|---|
+| **Deterministic services** (`apps/api/textileops/services`) | Every quantity, date, risk, shortage and money figure; applying changes; approval and execution; the audit trail | Ask a model to add anything up |
+| **AI layer** (`apps/api/textileops/ai`) | Reading messy documents and supplier emails into *candidate* facts; investigating an exception with read-only tools; drafting messages; suggesting an action | Write to an operational table, approve anything, or establish who a sender is |
+| **A person** | Approving every consequential action (`ActionProposal → Approval → Execution → AuditEvent`) | — |
+
+A model's output is validated against a schema, stored as an interpretation, and
+applied only by deterministic code after the reference resolves, the sender is
+verified and the change goes the way the claim implies. Its own confidence can
+only add caution. External documents are fenced as untrusted content in every
+prompt. `PILOT_MODE` stops anything changing without a named human approval.
+
+**Stack.** Python 3.11, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL 16 (native
+enums, JSONB, `FOR UPDATE SKIP LOCKED` job queue); Next.js 15, React 19,
+TypeScript, Tailwind; the Anthropic API behind a provider interface, with a
+rule-based provider that runs everything offline; Docker; Render.
 
 ---
 
@@ -173,9 +202,13 @@ page that scrolls sideways.
 
 ## Deploying it
 
-`render.yaml` deploys the demo to Render: a public web service, a private API,
-a worker and PostgreSQL. `infra/docker-compose.prod.yml` runs the same images
-on one host. Both are described, with what refuses to start and why, in
+`render.yaml` deploys the hosted demo to Render as **one container and a
+database**: Next.js is the only public listener and proxies `/api/v1` to
+FastAPI bound to loopback, with the worker alongside
+(`deploy/render/Dockerfile`). The browser session is an HttpOnly cookie, the
+demo resets itself after visitors leave, and no model key is configured.
+`infra/docker-compose.prod.yml` runs the services separately. Both are
+described, with what refuses to start and why, in
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ---
@@ -190,6 +223,8 @@ on one host. Both are described, with what refuses to start and why, in
 | [`docs/EXCEPTION_ENGINE.md`](docs/EXCEPTION_ENGINE.md) | Detection, deduplication, lifecycle, impact |
 | [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md) | Where AI is used, where it is not, and the boundary |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Trust boundaries, uploads, prompt injection, least privilege |
-| [`docs/DEMO.md`](docs/DEMO.md) | A guided tour of the seeded scenarios |
+| [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) | The hosted demo: how to enter, the golden walkthrough, limitations |
+| [`docs/DEMO.md`](docs/DEMO.md) | Every seeded scenario, in detail |
+| [`docs/PORTFOLIO_SUMMARY.md`](docs/PORTFOLIO_SUMMARY.md) | What it is, what the AI does and does not do, how it is validated |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Hosting, environment, the demo, migrations, operations |
 | [`docs/UI_AUDIT.md`](docs/UI_AUDIT.md) | What the interface got wrong before the design system |
