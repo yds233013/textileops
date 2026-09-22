@@ -16,8 +16,9 @@ from textileops.workers.queue import claim, registered_tasks, run_job, worker_id
 logger = get_logger("textileops.worker")
 _running = True
 
-#: How often a demo deployment checks whether its data is from a previous day.
-DEMO_REFRESH_EVERY_SECONDS = 600
+#: How often a demo deployment checks whether its data is from a previous day,
+#: or has been changed by a visitor and then left idle (seed/refresh.py).
+DEMO_REFRESH_EVERY_SECONDS = 120
 
 
 def _maybe_refresh_demo() -> None:

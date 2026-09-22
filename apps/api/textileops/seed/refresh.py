@@ -4,6 +4,11 @@ The demo is written relative to "today": promised dates in ten days, a supplier
 delay from yesterday. Left alone for a week it ages into a business where
 everything is late. So a demo deployment reloads itself once a day.
 
+It is also shared. One visitor who approves every proposal and closes every
+exception leaves the next visitor a finished story. So once visitors have
+changed anything and then left it alone for ``IDLE_RESET_MINUTES``, it reloads
+— never underneath someone who is still clicking.
+
 Reloading truncates every table, which makes this the most destructive thing
 TextileOps can do on its own. It therefore needs all of:
 
@@ -18,6 +23,7 @@ orders and no ``demo.seeded`` marker, and is left alone.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
@@ -30,6 +36,10 @@ from textileops.models.platform import AuditEvent
 from textileops.models.sales import SalesOrder
 from textileops.seed.demo import DEMO_SEEDED_ACTION, seed_demo_business
 from textileops.services import clock
+
+#: How long the demo must be left alone after a visitor changed it before it
+#: reloads. Long enough not to reset under a person reading a page.
+IDLE_RESET_MINUTES = 30
 
 logger = get_logger(__name__)
 
@@ -58,9 +68,32 @@ def refresh_demo_if_stale(session: Session, *, force: bool = False) -> RefreshRe
             False,
             "this database has orders and was not created by the demo seed; refusing to reset it",
         )
-    if not force and last is not None and clock.ensure_utc(last).date() >= clock.today():
-        return RefreshResult(False, "already refreshed today")
+    reason = _why_reload(session, last, force=force)
+    if reason is None:
+        return RefreshResult(False, "already refreshed today, and no visitor has changed it since")
 
     seed_demo_business(session, reset=True)
-    logger.info("demo_refreshed")
-    return RefreshResult(True, "reloaded the demo for today")
+    logger.info("demo_refreshed", reason=reason)
+    return RefreshResult(True, f"reloaded the demo: {reason}")
+
+
+def _why_reload(session: Session, last: dt.datetime | None, *, force: bool) -> str | None:
+    if force:
+        return "forced"
+    if last is None:
+        return "first load"
+    seeded_at = clock.ensure_utc(last)
+    if seeded_at.date() < clock.today():
+        return "a new day"
+    # A person's change after the seed wrote its marker (which it writes last).
+    visitor_last = session.scalar(
+        select(func.max(AuditEvent.occurred_at)).where(
+            AuditEvent.actor_type == "user", AuditEvent.occurred_at > seeded_at
+        )
+    )
+    if visitor_last is None:
+        return None
+    idle = clock.now() - clock.ensure_utc(visitor_last)
+    if idle >= dt.timedelta(minutes=IDLE_RESET_MINUTES):
+        return f"visitors changed it and it has been idle for {IDLE_RESET_MINUTES} minutes"
+    return None

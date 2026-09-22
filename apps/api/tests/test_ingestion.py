@@ -72,6 +72,18 @@ def test_stored_files_round_trip_and_reject_traversal(tmp_path, monkeypatch):
 # --- Parsing ------------------------------------------------------------------
 
 
+def test_a_file_that_is_gone_says_so_plainly(tmp_path, monkeypatch):
+    """The hosted demo keeps uploads only until it restarts. Reprocessing one
+    after that must say what happened, not report a vague failure."""
+    from textileops.core.config import settings
+
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    stored = storage.store(b"po_number,qty\nPO-1,10\n", filename="po.csv")
+    (tmp_path / stored.stored_path).unlink()
+    with pytest.raises(ValidationError, match="no longer stored on this server"):
+        storage.read(stored.stored_path)
+
+
 def test_csv_rows_are_parsed_with_their_headers():
     parsed = parsers.parse_csv(b"material,qty,unit\n40s cotton,1000,kg\n30s cotton,500,kg\n")
     assert len(parsed.rows) == 2

@@ -96,8 +96,16 @@ def read(stored_path: str) -> bytes:
         raise ValidationError("Invalid stored path.")
     root = upload_root()
     target = (root / stored_path).resolve()
-    if root not in target.parents or not target.is_file():
-        raise ValidationError("Stored file not found.")
+    if root not in target.parents:
+        raise ValidationError("Invalid stored path.")
+    if not target.is_file():
+        # Expected on a deployment without persistent storage (the hosted demo):
+        # files live until the service restarts. What was extracted from the
+        # file is in the database and is unaffected.
+        raise ValidationError(
+            "The original file is no longer stored on this server, so it cannot be "
+            "read again. What was already extracted from it is kept."
+        )
     return target.read_bytes()
 
 
