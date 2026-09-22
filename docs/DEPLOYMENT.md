@@ -1,79 +1,91 @@
 # Deployment and operations
 
-Two shapes are supported and both are tested with the same images:
+Two shapes are supported:
 
-* **A hosted demo** — fictional data, one-click sign-in, reloads itself daily.
-  This is what `render.yaml` and `infra/docker-compose.prod.yml` configure.
+* **A hosted demo** — fictional data, one-click sign-in, reloads itself daily
+  and after visitors have changed it and left. This is what `render.yaml`
+  deploys: one container and a database.
 * **A real business** — pilot mode, real users with passwords, no demo mode.
-  Same images, different environment. See *From demo to pilot* below.
+  Same code, services split apart. See *From demo to pilot* below.
 
-## Architecture
+## The hosted demo: one container
 
 ```
             browser
-               │  HTTPS (TLS terminated by the platform)
+               │  HTTPS (TLS terminated by Render)
                ▼
-      ┌─────────────────┐   /api/v1/*  (server-side proxy,
-      │  web  (Next.js) │───────────────  app/api/v1/[...path]/route.ts)
-      └─────────────────┘                      │
-                                               ▼  private network
-      ┌─────────────────┐            ┌──────────────────┐
-      │ worker (Python) │            │   api (FastAPI)  │
-      └────────┬────────┘            └────────┬─────────┘
-               └──────────────┬───────────────┘
-                              ▼
-                       PostgreSQL 16
+   ┌──────────────────────────────── one container (deploy/render/Dockerfile) ─┐
+   │                                                                          │
+   │   Next.js  0.0.0.0:$PORT  ── /api/v1/* ──▶  FastAPI  127.0.0.1:8000       │
+   │   (the only listener       server-side      (loopback only: no address   │
+   │    reachable from outside)  proxy            anyone outside can reach)   │
+   │                                                                          │
+   │   worker (job queue, demo refresh)  ── no listener                       │
+   └──────────────────────────────────┬───────────────────────────────────────┘
+                                      ▼
+                          Render PostgreSQL 16 (managed)
 ```
+
+`deploy/render/start.sh` migrates (under an advisory lock), loads or refreshes
+the demo, then starts the three processes. If any of them exits, it stops the
+others and exits non-zero so Render restarts the container: a web front end
+answering in front of a dead API would be a demo that lies. Render's health
+check is `/api/v1/health` **through the web server's proxy**, so it only passes
+when web, API and database all work.
+
+**Why one container.** On Render, a private service and a background worker
+each need their own paid instance (neither has a free plan). A demo does not
+need them scaled independently, and the boundary that matters survives: the API
+has no public address and the browser only ever talks to the web origin. It
+also means an uploaded file lands on the filesystem the worker reads.
+
+**Cost.** Render's current prices (checked on render.com/pricing): the
+`0.5c-512mb` web instance is $7/month and the `0.1c-256mb` database $6/month
+plus $0.30/GB of storage — about **$13.30/month**. The free web plan sleeps
+after 15 idle minutes (about a minute to wake) and the free database is deleted
+after 30 days, so neither suits a link meant to be sent to people. The
+three-service layout would cost about $27/month.
+
+**Memory.** All three processes run in 512 MB: roughly 200 MB after seeding,
+with one API worker process (`WEB_CONCURRENCY=1`) and Node's heap capped.
+
+**The model provider's key is not configured at all** on the hosted demo:
+`AI_PROVIDER=stub`, and there is no `ANTHROPIC_API_KEY` entry in the Blueprint.
+Every investigation there comes from the deterministic rule engine and says so.
+
+### Creating it on Render
+
+1. Render dashboard → **New → Blueprint** → select this (private) repository.
+   Render's GitHub app needs access to the repository — grant it to *only
+   select repositories*.
+2. Render reads `render.yaml` and shows two resources: the `textileops` web
+   service and the `textileops-db` database. A payment method is needed for the
+   paid plans.
+3. **Apply.** The database is created, the container migrates and loads the
+   demo company on first boot, and the site is available at its
+   `onrender.com` address.
+4. If the address Render assigns differs from `https://textileops.onrender.com`,
+   set `CORS_ORIGINS` to it. The proxy makes CORS unused in practice; the
+   setting is kept correct so it is never wide open.
+
+`autoDeploy` is off: a push to `main` does not redeploy. Deploy deliberately
+from the dashboard (**Manual Deploy → Deploy latest commit**).
+
+## A real business: separate services
+
+`apps/api/Dockerfile` (API and worker, one image, two commands) and
+`apps/web/Dockerfile` (the web server, `API_ORIGIN` pointing at the API) run the
+same code split apart; `infra/docker-compose.prod.yml` runs them on one host.
 
 | Process | Image | Command | Notes |
 |---|---|---|---|
-| web | `apps/web/Dockerfile` | `node server.js` | The only public service. Proxies `/api/v1` to the API, so there is no CORS and no build-time API URL. |
-| api | `apps/api/Dockerfile` | `scripts/start-api.sh` | Runs migrations under an advisory lock, then uvicorn. Stateless; scale horizontally. |
-| worker | `apps/api/Dockerfile` | `scripts/start-worker.sh` | Same image as the API. Several may run: jobs are claimed with `FOR UPDATE SKIP LOCKED`. |
+| web | `apps/web/Dockerfile` | `node server.js` | The only public service. Proxies `/api/v1` to the API. |
+| api | `apps/api/Dockerfile` | `scripts/start-api.sh` | Migrates under an advisory lock, then uvicorn. Stateless. |
+| worker | `apps/api/Dockerfile` | `scripts/start-worker.sh` | Several may run: jobs are claimed with `FOR UPDATE SKIP LOCKED`. |
 | database | PostgreSQL 16 | — | The only infrastructure dependency. No broker, no cache. |
 
-**The model provider's key never reaches the browser.** It is set on the API
-and worker only. The web service has no secrets at all — it knows where the
-API is, and nothing else. The frontend bundle is checked for key material in
-the verification step below.
-
-## Recommended hosting: Render
-
-Chosen because the architecture maps onto it one-to-one — a public web service,
-a *private* API service, a background worker and managed PostgreSQL — from a
-private GitHub repository, with TLS, health checks and zero-downtime deploys
-included. `render.yaml` describes all of it.
-
-1. Push the repository to GitHub (it is already at the private repo).
-2. Render dashboard → **New → Blueprint** → connect GitHub → select the repo.
-   Render reads `render.yaml` and shows the four resources.
-3. Leave `ANTHROPIC_API_KEY` empty for a public demo (see *AI on a public demo*).
-4. **Apply.** The database is created, the API migrates and loads the demo
-   company on first boot, and the web service becomes available at its
-   `onrender.com` address.
-5. Open the web URL. The sign-in page offers **Explore the demo**.
-6. If the web service's URL differs from `https://textileops-web.onrender.com`,
-   update `CORS_ORIGINS` on the API to match (the proxy makes CORS unused in
-   practice; the setting is kept correct so it is never wide open).
-
-A custom domain is added on the web service only.
-
-Things to check in the dashboard before applying, because they change: the
-plan names and prices in `render.yaml`, and that private services and workers
-are available on the plan you choose (they are not on free plans).
-
-### Alternatives
-
-* **One VM with Docker** — `infra/docker-compose.prod.yml` runs the same four
-  pieces on a single host. Put Caddy or nginx in front of port 3000 for TLS.
-  Cheapest; you own patching and backups.
-* **Fly.io / Railway** — both run the two Dockerfiles as-is. Create a Postgres,
-  an API app (internal only), a worker from the same image with
-  `./scripts/start-worker.sh`, and a web app with `API_ORIGIN` pointing at the
-  API's internal address.
-* **Vercel for the web** — possible (the proxy is a standard route handler),
-  but the API would then need a public address and the worker a separate home.
-  Not recommended: it splits one system across two platforms for no gain.
+Separate API and worker services need a shared `UPLOAD_DIR` (a shared disk or
+object storage), because the worker reads the file the API stored.
 
 ## Environment
 
@@ -91,7 +103,8 @@ Every variable is documented in `.env.example`. The ones that matter here:
 | `AI_PROVIDER` | api, worker | `stub`, `anthropic` or `auto`. |
 | `ANTHROPIC_API_KEY` | api, worker | Optional. Never on the web service. |
 | `API_ORIGIN` / `API_HOSTPORT` | web | Where the proxy sends `/api/v1`. A full URL, or a private-network `host:port`. |
-| `UPLOAD_DIR` | api, worker | Persistent storage for source documents in a real deployment. |
+| `UPLOAD_DIR` | api, worker | Persistent storage for source documents in a real deployment. Ephemeral on the hosted demo. |
+| `WEB_CONCURRENCY` | api | uvicorn worker processes. `1` in the 512 MB demo container. |
 
 Business thresholds are configuration, not code: `ORDER_AT_RISK_BUFFER_DAYS`,
 `SUPPLIER_DELAY_WARN_DAYS`, `SHIPMENT_DELAY_GRACE_DAYS`, `PO_LATE_GRACE_DAYS`.
@@ -110,21 +123,30 @@ a document telling a person to remember something is not a control:
 
 * **Sign-in.** `DEMO_MODE` enables `POST /auth/demo-login`, which signs in as
   the seeded owner. With demo mode off it answers exactly as a wrong password.
+  The session is an HttpOnly, `Secure`, `SameSite=Lax` cookie — see
+  `docs/SECURITY.md`.
 * **Freshness.** The data is written relative to "today". The worker checks
-  every ten minutes and reloads it once per UTC day
-  (`textileops demo-refresh`). The API also loads it on first boot.
+  every two minutes and reloads it once per UTC day (`textileops demo-refresh`).
+  The container also loads it on first boot.
+* **Shared state, and putting it back.** Every visitor is the same owner on the
+  same data. So once a visitor has changed anything (any audit event with a
+  person as actor) and the demo has then been left alone for 30 minutes, the
+  worker reloads it. It never reloads underneath someone still clicking; two
+  visitors at the same moment do share one demo.
 * **Safety of the reload.** It truncates every table, so it runs only in demo
   mode, never alongside pilot mode, and never on a database the demo seed did
   not create (it looks for the seed's own `demo.seeded` audit marker, and
   refuses any database that has orders without one).
-* **Shared state.** Every visitor is the same owner on the same data. An
-  approval one visitor makes, another sees, until the next daily reload.
-* **Uploads** go to the container's disk and vanish on redeploy. Harmless for a
-  demo; a real deployment needs a persistent disk or object storage.
+  `tests/adversarial/test_demo_refresh.py` covers each condition.
+* **Uploads are not kept.** The container's disk is ephemeral: an upload is
+  stored, parsed and extracted straight away, and what was extracted is in the
+  database, but the original file disappears on the next restart or deploy.
+  Reprocessing it after that says exactly that. The upload screen tells demo
+  visitors so. A real deployment needs a persistent disk or object storage.
 
 ### AI on a public demo
 
-`render.yaml` sets `AI_PROVIDER=stub`. Every investigation on the public demo
+`render.yaml` sets `AI_PROVIDER=stub` and configures no key. Every investigation on the public demo
 is produced by the deterministic rule engine and labelled as such in the UI.
 
 Setting a real key on a public demo would let any visitor start model calls on

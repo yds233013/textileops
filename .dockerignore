@@ -1,0 +1,26 @@
+# Build context for deploy/render/Dockerfile (the repository root).
+# Nothing secret, nothing local, nothing the image does not need.
+.git
+.github
+.claude
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.local.example
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.hypothesis
+**/tsconfig.tsbuildinfo
+apps/api/var
+apps/api/tests
+apps/web/tests
+apps/web/e2e
+apps/web/test-results
+apps/web/playwright-report
+infra
+docs

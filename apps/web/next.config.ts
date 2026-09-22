@@ -1,5 +1,26 @@
 import type { NextConfig } from "next";
 
+/**
+ * Content Security Policy for production builds. Everything comes from this
+ * origin — fonts are self-hosted, the API is proxied — so the policy can be
+ * strict about sources. 'unsafe-inline' on scripts is what Next.js's inline
+ * hydration data needs without per-request nonces; frame-ancestors, object-src
+ * and base-uri close the other doors. Development is exempt: hot reload needs
+ * eval and a direct API origin.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join("; ");
+
 const config: NextConfig = {
   reactStrictMode: true,
   // The floating dev badge sat on top of the navigation in every review.
@@ -24,6 +45,9 @@ const config: NextConfig = {
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
           { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+          ...(process.env.NODE_ENV === "production"
+            ? [{ key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY }]
+            : []),
         ],
       },
     ];
