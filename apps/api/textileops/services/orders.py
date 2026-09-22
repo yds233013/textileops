@@ -192,7 +192,9 @@ def batches_by_order_line(
         return {}
     grouped: dict[uuid.UUID, list[ProductionBatch]] = {line_id: [] for line_id in ids}
     for batch in session.scalars(
-        select(ProductionBatch).where(ProductionBatch.sales_order_line_id.in_(ids))
+        select(ProductionBatch)
+        .where(ProductionBatch.sales_order_line_id.in_(ids))
+        .order_by(ProductionBatch.planned_start, ProductionBatch.code)
     ).all():
         if batch.sales_order_line_id is not None:
             grouped.setdefault(batch.sales_order_line_id, []).append(batch)
@@ -254,9 +256,9 @@ def assess_order(
             if batches is not None and line.id in batches
             else list(
                 session.scalars(
-                    select(ProductionBatch).where(
-                        ProductionBatch.sales_order_line_id == line.id
-                    )
+                    select(ProductionBatch)
+                    .where(ProductionBatch.sales_order_line_id == line.id)
+                    .order_by(ProductionBatch.planned_start, ProductionBatch.code)
                 ).all()
             )
         )
@@ -650,11 +652,20 @@ def assess_open_orders(session: Session) -> list[OrderAssessment]:
         .where(SalesOrder.status.in_(OPEN_SALES_ORDER_STATUSES))
         .order_by(SalesOrder.promised_date)
     ).all()
-    # One allocation for the whole set, so the answers are mutually consistent.
+    return assess_orders(session, list(orders))
+
+
+def assess_orders(session: Session, orders: list[SalesOrder]) -> list[OrderAssessment]:
+    """Assess several orders at once — the same answers as one at a time, with
+    the shared work done once.
+
+    One finished-goods allocation for the whole set, so the answers are
+    mutually consistent. Batches and shipments read once for every line rather
+    than per order (on a year of orders, about eight thousand queries against a
+    handful), and each material's coverage computed once, since it does not
+    depend on which order is asking.
+    """
     finished_goods = allocate_finished_goods(session)
-    # Batches and shipments read once for every line rather than per order. On
-    # a year of orders that is the difference between about eight thousand
-    # queries and a handful.
     line_ids = [line.id for order in orders for line in order.lines]
     batches = batches_by_order_line(session, line_ids)
     shipments = shipments_by_order_line(session, line_ids)

@@ -175,7 +175,7 @@ def list_orders(
 
     found = list(session.scalars(stmt.limit(limit)).all())
     counts = _exception_counts(session, [order.id for order in found])
-    assessments = [order_service.assess_order(session, order) for order in found]
+    assessments = order_service.assess_orders(session, found)
     if risk:
         wanted = RiskLevel(risk)
         assessments = [a for a in assessments if a.risk == wanted]

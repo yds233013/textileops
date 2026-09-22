@@ -14,7 +14,7 @@
  *    wrote and what a model thinks are styled differently, always.
  */
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { humanise } from "@/lib/format";
 import { statusLabel } from "@/lib/labels";

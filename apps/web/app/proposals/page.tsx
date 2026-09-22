@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { useState } from "react";
 import { IconArrowRight, IconCheckCircle } from "@/components/icons";
 import { Card, EmptyState, ErrorState, Loading, PageHeader, StatusPill, Tabs } from "@/components/ui";

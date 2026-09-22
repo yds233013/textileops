@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/link";
 import { money, num, relativeAge } from "@/lib/format";
 import { exceptionTypeLabel } from "@/lib/labels";
 import type { AttentionCard as Card, ImpactMetric } from "@/lib/types";
