@@ -4,7 +4,7 @@ AI-assisted production and order control for textile manufacturers.
 
 **Live demo:** https://textileops.onrender.com — press *Explore the demo*. It
 runs on a fictional company with invented data, on free hosting that sleeps when
-idle (the first visit after a quiet spell takes a minute or two to wake); see
+idle (the first visit after a quiet spell takes about 45 seconds to wake); see
 [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) for a two-minute walkthrough.
 
 A mid-sized knit-fabric business runs on spreadsheets, WhatsApp messages and

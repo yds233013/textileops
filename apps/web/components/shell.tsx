@@ -202,10 +202,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {health.demo_mode && (
                 <span
                   title="Kaveri Knit Fabrics is a fictional company. Every order, supplier and figure here is invented demonstration data."
-                  className="hidden items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-800 ring-1 ring-inset ring-brand-200 sm:inline-flex"
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-800 ring-1 ring-inset ring-brand-200"
                 >
                   <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-brand-500" />
-                  Demo · fictional data
+                  {/* On a phone too: nobody should mistake this for a real company's data. */}
+                  <span className="sm:hidden">Fictional demo</span>
+                  <span className="hidden sm:inline">Demo · fictional data</span>
                 </span>
               )}
               {user && <UserMenu user={user} onSignOut={signOut} />}

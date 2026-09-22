@@ -63,8 +63,8 @@ at the moment of execution, and every step is audited.
 * **Free hosting, so the first visit can be slow.** The demo runs on Render's
   free plan, which puts it to sleep after 15 minutes without visitors. The next
   visit wakes it: the page says *Waking TextileOps up…* and carries on by
-  itself, typically within one to two minutes. Open the link a couple of minutes
-  before showing it to someone.
+  itself — about 45 seconds when measured. Open the link a minute before showing
+  it to someone.
 * **A small server.** Once awake, the Command Centre takes a few seconds to fill
   in and other pages one to three; grey placeholders show while they load.
 * **Fictional data only.** Nothing here is a real company, and TextileOps is not

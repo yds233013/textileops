@@ -22,8 +22,8 @@ export function WakingUp({ compact = false }: { compact?: boolean }) {
         <p className="text-[13.5px] font-medium text-brand-900">Waking TextileOps up…</p>
       </div>
       <p className="mt-1.5 text-[13px] leading-5 text-brand-800/80">
-        This demo runs on free hosting, which goes to sleep when nobody is using it. Waking it and
-        loading today&apos;s demo data takes a minute or two. This page carries on by itself.
+        This demo runs on free hosting, which goes to sleep when nobody is using it. Waking it takes
+        about a minute. This page carries on by itself.
       </p>
       {seconds >= 5 && <p className="mt-1.5 text-xs text-brand-800/60 tnum">Waiting {seconds} s</p>}
     </div>

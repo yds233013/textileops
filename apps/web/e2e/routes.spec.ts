@@ -54,6 +54,8 @@ for (const route of ROUTES) {
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(route, { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // Every screen, at every width, says the data is invented.
+    await expect(page.locator('[title*="fictional company"]')).toBeVisible();
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
