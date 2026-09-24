@@ -41,3 +41,8 @@ uploads/
 
 # Local editor/agent tooling
 .claude/
+
+# Local agent/assistant instruction files
+CLAUDE.md
+AGENTS.md
+.claude/
