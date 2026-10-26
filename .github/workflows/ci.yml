@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    # Everything in scripts/verify.sh: backend lint, types and tests against a
+    # real PostgreSQL, the AI evaluations on the rule engine (no key, no
+    # spend), a data integrity check on the seeded demo, and the frontend's
+    # types, lint, unit tests and production build.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: textileops
+          POSTGRES_PASSWORD: textileops
+          POSTGRES_DB: textileops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U textileops -d textileops"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://textileops:textileops@localhost:5432/textileops
+      TEST_DATABASE_URL: postgresql+psycopg://textileops:textileops@localhost:5432/textileops_test
+      AI_PROVIDER: stub
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Create the test database
+        run: PGPASSWORD=textileops psql -h localhost -U textileops -d postgres -c "CREATE DATABASE textileops_test"
+
+      - name: Backend dependencies
+        working-directory: apps/api
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install --quiet -e ".[dev]"
+
+      - name: Migrate and seed the demo business
+        working-directory: apps/api
+        run: |
+          .venv/bin/alembic upgrade head
+          .venv/bin/python -m textileops.cli seed --reset > /dev/null
+
+      - name: Frontend dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify
+        run: ./scripts/verify.sh
