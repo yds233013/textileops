@@ -66,7 +66,7 @@ writing): no sleep, no database expiry.
 
 ### Creating it on Render
 
-1. Render dashboard → **New → Blueprint** → select this (private) repository.
+1. Render dashboard → **New → Blueprint** → select this repository.
    Render's GitHub app needs access to the repository — grant it to *only
    select repositories*.
 2. Render reads `render.yaml` and shows two resources: the `textileops` web

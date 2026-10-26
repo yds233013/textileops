@@ -1,19 +1,44 @@
 # TextileOps
 
-AI-assisted production and order control for textile manufacturers.
+[![CI](https://github.com/yds233013/textileops/actions/workflows/ci.yml/badge.svg)](https://github.com/yds233013/textileops/actions/workflows/ci.yml)
 
-**Live demo:** https://textileops.onrender.com — press *Explore the demo*. It
-runs on a fictional company with invented data, on free hosting that sleeps when
-idle (the first visit after a quiet spell takes about 45 seconds to wake); see
-[`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) for a two-minute walkthrough.
+Order and production control for textile manufacturers: it notices when a
+supplier delay, shortage or QC failure puts a customer order at risk, costs it,
+and proposes what to do — and nothing happens until a person approves.
+
+**Live demo: https://textileops.onrender.com** — press *Explore the demo* (no
+sign-up). Demo runs on a fictional company; free hosting sleeps when idle, so
+the first visit can take ~45 s to wake. Two-minute walkthrough:
+[`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md).
+
+![Command centre: orders at risk, shortages and actions awaiting approval](docs/images/command-centre.jpg)
+
+**End to end:**
+
+- **Ingest** — documents, spreadsheets and supplier emails become *candidate* facts (model or rule engine), applied only by deterministic code after the reference and sender check out.
+- **Detect** — an exception engine re-derives ten kinds of problem (orders at risk, shortages, late POs, QC failures, shipment delays…) from current state; cleared conditions close themselves.
+- **Cost** — days at risk, quantity, customers affected and revenue exposure from recorded prices; unknowable figures are shown as unknown, with the reason.
+- **Propose → approve** — a read-only investigator writes up the cause and drafts the action; `ActionProposal → Approval → Execution → AuditEvent`, every step audited.
+
+**Validated by** 586 backend tests on real PostgreSQL (338 of them adversarial
+regressions), 87 frontend tests, a 24-case AI evaluation suite and 12 data
+integrity checks — all run by [`scripts/verify.sh`](scripts/verify.sh) in CI.
+
+**Stack:** Python 3.11 · FastAPI · SQLAlchemy 2 · PostgreSQL 16 · Next.js 15 / React 19 / TypeScript · Anthropic API behind a provider interface (with an offline rule engine) · Docker · Render.
+
+```bash
+./scripts/setup.sh     # Postgres (Docker), dependencies, migrations, demo data
+./scripts/dev.sh       # API, worker and web app → http://localhost:3000
+```
+
+## Why
 
 A mid-sized knit-fabric business runs on spreadsheets, WhatsApp messages and
 the owner's memory. The work that actually keeps customers happy — noticing
 that a yarn shipment slipped, working out which order that puts at risk, and
 telling someone before it is too late — happens in people's heads, several
-times a day, and stops when they are busy.
-
-TextileOps does that noticing continuously, and shows its working.
+times a day, and stops when they are busy. TextileOps does that noticing
+continuously, and shows its working:
 
 ```
 What needs my attention right now?
@@ -25,6 +50,8 @@ What should I do?
 It is not a generic ERP, and it is not a chatbot bolted onto a database. The
 arithmetic is deterministic code with tests; the model reads unstructured
 material and drafts explanations; a person approves anything consequential.
+
+![An exception: what happened, what it costs, and the proposed action](docs/images/exception-detail.jpg)
 
 ---
 
@@ -195,7 +222,8 @@ cd apps/api && .venv/bin/python -m textileops.cli simulate supplier_delay
 
 Runs backend lint, type checking and tests; the AI evaluation suite; a data
 integrity check; frontend type checking, lint and tests; and a production
-frontend build.
+frontend build. CI (`.github/workflows/ci.yml`) runs the same script against
+PostgreSQL 16 on every push.
 
 With the stack running in demo mode, `npm run e2e` in `apps/web` loads every
 screen at desktop, laptop and phone widths and fails on a console error or a
@@ -212,6 +240,9 @@ no model key is configured. The free plan sleeps when idle and its database
 expires after 30 days — the limitations and what TextileOps does about each are
 in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), which also covers running the
 services separately (`infra/docker-compose.prod.yml`) and what refuses to start.
+To back the demo with a free database that does not expire (Neon, Supabase),
+use [`render.external-db.yaml`](render.external-db.yaml) instead — see
+*Using an external database* in `docs/DEPLOYMENT.md`.
 
 ---
 
@@ -228,3 +259,5 @@ services separately (`infra/docker-compose.prod.yml`) and what refuses to start.
 | [`docs/DEMO.md`](docs/DEMO.md) | Every seeded scenario, in detail |
 | [`docs/PORTFOLIO_SUMMARY.md`](docs/PORTFOLIO_SUMMARY.md) | What it is, what the AI does and does not do, how it is validated |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Hosting, environment, the demo, migrations, operations |
+| [`docs/ADVERSARIAL_AUDIT.md`](docs/ADVERSARIAL_AUDIT.md) | Defects found by trying to break it, each with a regression test |
+| [`docs/LIVE_AI_VALIDATION.md`](docs/LIVE_AI_VALIDATION.md) | What was tested against a real model, and what it found |
