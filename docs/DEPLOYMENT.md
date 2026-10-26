@@ -82,6 +82,27 @@ writing): no sleep, no database expiry.
 `autoDeploy` is off: a push to `main` does not redeploy. Deploy deliberately
 from the dashboard (**Manual Deploy → Deploy latest commit**).
 
+### Using an external database
+
+Render's free database expires after 30 days. A free database from another
+provider (Neon, Supabase) does not, so the demo stops needing a renewal.
+`render.external-db.yaml` is the same Blueprint without the Render database
+(`tests/test_deployment_config.py` fails if the two drift apart):
+
+1. Create a PostgreSQL database with the provider (16 if offered; 14+ works)
+   and copy its **direct** connection string — not the pooled one, because
+   migrations hold a session-level advisory lock that a transaction-mode
+   pooler does not keep. `postgres://…?sslmode=require` works as given.
+2. Render dashboard → **New → Blueprint** → this repository, with
+   **Blueprint path** `render.external-db.yaml`.
+3. Render asks for `DATABASE_URL`; paste the string. **Apply.** The first boot
+   migrates and seeds the empty database, exactly as on a Render database.
+
+To move an existing deployment instead, delete the `textileops-db` database
+and replace the web service's `DATABASE_URL` in **Environment** — but a later
+sync of `render.yaml` would point it back at a Render database, so prefer the
+Blueprint above.
+
 ## A real business: separate services
 
 `apps/api/Dockerfile` (API and worker, one image, two commands) and

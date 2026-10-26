@@ -120,3 +120,21 @@ def test_the_image_ships_compiled_bytecode_and_no_docker_healthcheck():
 def test_the_bundle_is_built_to_use_the_same_origin_proxy():
     """A local .env.local pointing at localhost:8000 must not leak into the image."""
     assert "ENV NEXT_PUBLIC_API_BASE_URL=\n" in DOCKERFILE
+
+
+EXTERNAL_DB = yaml.safe_load((ROOT / "render.external-db.yaml").read_text())
+
+
+def test_the_external_database_blueprint_differs_only_in_where_the_database_is():
+    """render.external-db.yaml is render.yaml without the expiring free
+    database. Anything else drifting between the two would mean the
+    alternative deploys a different demo from the one these tests pin."""
+    assert "databases" not in EXTERNAL_DB, "the point is to create no Render database"
+    [service] = EXTERNAL_DB["services"]
+    env = _env(service)
+    assert env.pop("DATABASE_URL") == {"key": "DATABASE_URL", "sync": False}
+    expected_env = dict(ENV)
+    expected_env.pop("DATABASE_URL")
+    assert env == expected_env
+    without_env = {k: v for k, v in service.items() if k != "envVars"}
+    assert without_env == {k: v for k, v in SERVICE.items() if k != "envVars"}

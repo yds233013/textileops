@@ -1,0 +1,54 @@
+# Render Blueprint for the hosted TextileOps demo, with an EXTERNAL database.
+#
+#   Render dashboard → New → Blueprint → this repository →
+#   Blueprint path: render.external-db.yaml
+#
+# Identical to render.yaml except that it creates no Render database: the web
+# service's DATABASE_URL is asked for when the Blueprint is created. Render's
+# free PostgreSQL expires 30 days after creation; a free database elsewhere
+# (Neon, Supabase, ...) does not, so the demo stops needing a renewal.
+#
+# Use the provider's DIRECT connection string, not its pooled one: migrations
+# take a session-level advisory lock, which a transaction-mode pooler does not
+# keep. A `postgres://…?sslmode=require` URL works as given; the driver is
+# added automatically (core/config.py). See docs/DEPLOYMENT.md, "Using an
+# external database".
+#
+# Everything else — one free container, DEMO_MODE, the rule engine, no model
+# key — is as described at the top of render.yaml.
+
+services:
+  - type: web
+    name: textileops
+    runtime: docker
+    # Both paths are relative to the repository root.
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    plan: free
+    # Through the web server and its proxy to the API and the database: green
+    # means the whole chain works, not only that Node is up.
+    healthCheckPath: /api/v1/health
+    autoDeploy: false
+    envVars:
+      # Prompted for once, when the Blueprint is created; never stored in git.
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DEMO_MODE
+        value: "true"
+      - key: PILOT_MODE
+        value: "false"
+      # The rule engine, deliberately: a public demo must not let any visitor
+      # spend on a model account. No model key is configured on this service.
+      - key: AI_PROVIDER
+        value: stub
+      - key: CORS_ORIGINS
+        value: https://textileops.onrender.com
+      # 512 MB holds three processes; one API worker process is plenty for a demo.
+      - key: WEB_CONCURRENCY
+        value: "1"
