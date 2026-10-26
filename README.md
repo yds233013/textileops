@@ -219,7 +219,6 @@ services separately (`infra/docker-compose.prod.yml`) and what refuses to start.
 
 | | |
 |---|---|
-| [`CLAUDE.md`](CLAUDE.md) | Invariants and working notes for future sessions |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it is put together, and why |
 | [`docs/DOMAIN.md`](docs/DOMAIN.md) | The textile domain model, units, and the traps |
 | [`docs/EXCEPTION_ENGINE.md`](docs/EXCEPTION_ENGINE.md) | Detection, deduplication, lifecycle, impact |
@@ -229,4 +228,3 @@ services separately (`infra/docker-compose.prod.yml`) and what refuses to start.
 | [`docs/DEMO.md`](docs/DEMO.md) | Every seeded scenario, in detail |
 | [`docs/PORTFOLIO_SUMMARY.md`](docs/PORTFOLIO_SUMMARY.md) | What it is, what the AI does and does not do, how it is validated |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Hosting, environment, the demo, migrations, operations |
-| [`docs/UI_AUDIT.md`](docs/UI_AUDIT.md) | What the interface got wrong before the design system |

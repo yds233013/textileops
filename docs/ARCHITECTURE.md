@@ -1,7 +1,7 @@
 # Architecture
 
-This document explains the decisions, not the file listing. For the listing,
-read `CLAUDE.md`.
+This document explains the decisions, not the file listing. For where things
+live, see *How it is built* in the [README](../README.md).
 
 ## The loop the product is built around
 

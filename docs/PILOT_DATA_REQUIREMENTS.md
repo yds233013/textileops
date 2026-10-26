@@ -197,7 +197,7 @@ Several receipts against one line is normal and expected.
 
 *If a receipt turns out to be wrong after import,* do not edit it — use the
 correction path in the application, which keeps both the original and the
-correction. See `docs/OVERNIGHT_AUDIT.md`.
+correction (`correct_receipt` in `apps/api/textileops/services/procurement.py`).
 
 ### production_batches.csv
 
